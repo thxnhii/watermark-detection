@@ -9,46 +9,10 @@ import json
 from PIL import Image
 import shutil
 import nest_asyncio
+from utils import clear_all_data, setup_directories
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
-
-def clear_all_data():
-    """Clear all data folders and files"""
-    try:
-        # Clear input_images folder
-        if os.path.exists("input_images"):
-            for file in os.listdir("input_images"):
-                file_path = os.path.join("input_images", file)
-                try:
-                    if os.path.isfile(file_path):
-                        os.unlink(file_path)
-                except Exception as e:
-                    print(f"Error deleting {file_path}: {e}")
-        else:
-            os.makedirs("input_images", exist_ok=True)
-        
-        # Clear output_images folder
-        if os.path.exists("output_images"):
-            for file in os.listdir("output_images"):
-                file_path = os.path.join("output_images", file)
-                try:
-                    if os.path.isfile(file_path):
-                        os.unlink(file_path)
-                except Exception as e:
-                    print(f"Error deleting {file_path}: {e}")
-        else:
-            os.makedirs("output_images", exist_ok=True)
-        
-        # Clear result.json
-        if os.path.exists("result.json"):
-            os.remove("result.json")
-            
-    except Exception as e:
-        print(f"Error during cleanup: {e}")
-        # Ensure directories exist even if cleanup fails
-        os.makedirs("input_images", exist_ok=True)
-        os.makedirs("output_images", exist_ok=True)
 
 # Initialize session state
 if 'initialized' not in st.session_state:
@@ -157,47 +121,20 @@ def run_pipeline():
             batch_size=batch_size
         )
         
-        status_placeholder.info("Fetching images from Figma...")
-        
-        with capture_output() as (out, err):
-            image_urls = pipeline._get_figma_images()
-            debug_output = out.getvalue()
-        
-        if debug_mode:
-            debug_placeholder.code(debug_output, language="text")
-        
-        if not image_urls:
-            status_placeholder.error("No images found in the Figma file")
-            return
-            
-        total_batches = (len(image_urls) + batch_size - 1) // batch_size
-        progress_bar = progress_placeholder.progress(0)
+        status_placeholder.info("Starting pipeline...")
         
         # Create a single event loop for the entire pipeline
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         try:
-            for i in range(0, len(image_urls), batch_size):
-                batch_num = i // batch_size + 1
-                status_placeholder.info(f"Processing batch {batch_num} of {total_batches}")
-                
-                batch = image_urls[i:i + batch_size]
-                # Run batch processing using the same event loop
-                downloaded_paths = loop.run_until_complete(pipeline._process_batch(batch, batch_num))
-                
-                if downloaded_paths:
-                    pipeline.run_inference(downloaded_paths)
-                    pipeline._clear_input_directory()
-                
-                progress = (batch_num / total_batches)
-                progress_bar.progress(progress)
+            # Run the pipeline using the FigmaPipeline's run_pipeline method
+            loop.run_until_complete(pipeline.run_pipeline())
+            status_placeholder.success("Pipeline completed successfully!")
+            st.rerun()  # Refresh the page to show new results
         finally:
             # Clean up the event loop
             loop.close()
-        
-        status_placeholder.success("Pipeline completed successfully!")
-        st.rerun()  # Refresh the page to show new results
                 
     except Exception as e:
         status_placeholder.error(f"Error: {str(e)}")

@@ -8,6 +8,7 @@ import aiohttp
 import ssl
 import certifi
 from watermark_detection import run_inference as detect_watermarks
+from utils import setup_directories, clear_directory
 
 class FigmaPipeline:
     def __init__(self, figma_file_key: str, figma_access_token: str, batch_size: int = 10):
@@ -16,27 +17,16 @@ class FigmaPipeline:
         self.batch_size = batch_size
         self.input_dir = "input_images"
         self.output_dir = "output_images"
-        self._setup_directories()
+        setup_directories(self.input_dir, self.output_dir)
         
         # Configure SSL context
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
 
-    def _setup_directories(self):
-        """Create input and output directories if they don't exist"""
-        os.makedirs(self.input_dir, exist_ok=True)
-        os.makedirs(self.output_dir, exist_ok=True)
-
     def _clear_input_directory(self):
         """Clear all files from the input directory"""
-        for filename in os.listdir(self.input_dir):
-            file_path = os.path.join(self.input_dir, filename)
-            try:
-                if os.path.isfile(file_path):
-                    os.unlink(file_path)
-            except Exception as e:
-                print(f"Error deleting {file_path}: {e}")
+        clear_directory(self.input_dir)
 
     def _get_image_url(self, image_ref: str) -> str:
         """Create Figma image URL from imageRef"""
@@ -159,10 +149,11 @@ class FigmaPipeline:
             # Process images in batches
             for i in range(0, len(image_refs), self.batch_size):
                 batch = image_refs[i:i + self.batch_size]
-                print(f"Processing batch {i//self.batch_size + 1}")
+                batch_num = i//self.batch_size + 1
+                print(f"Processing batch {batch_num}")
                 
                 # Download batch of images
-                downloaded_paths = await self._process_batch(batch, i//self.batch_size + 1)
+                downloaded_paths = await self._process_batch(batch, batch_num)
                 
                 if downloaded_paths:
                     # Run inference on the batch
@@ -171,7 +162,7 @@ class FigmaPipeline:
                     # Clear input directory after processing
                     self._clear_input_directory()
                 
-                print(f"Completed batch {i//self.batch_size + 1}")
+                print(f"Completed batch {batch_num}")
                 
         except Exception as e:
             print(f"Pipeline error: {e}")
