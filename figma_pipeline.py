@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import shutil
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Callable
 import asyncio
 import aiohttp
 import ssl
@@ -11,18 +11,25 @@ from watermark_detection import run_inference as detect_watermarks
 from utils import setup_directories, clear_directory
 
 class FigmaPipeline:
-    def __init__(self, figma_file_key: str, figma_access_token: str, batch_size: int = 10):
+    def __init__(self, figma_file_key: str, figma_access_token: str, batch_size: int = 10, 
+                 progress_callback: Callable[[str, float], None] = None):
         self.figma_file_key = figma_file_key
         self.figma_access_token = figma_access_token
         self.batch_size = batch_size
         self.input_dir = "input_images"
         self.output_dir = "output_images"
+        self.progress_callback = progress_callback
         setup_directories(self.input_dir, self.output_dir)
         
         # Configure SSL context
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
+
+    def _update_progress(self, stage: str, progress: float):
+        """Update progress if callback is provided"""
+        if self.progress_callback:
+            self.progress_callback(stage, progress)
 
     def _clear_input_directory(self):
         """Clear all files from the input directory"""
@@ -70,15 +77,19 @@ class FigmaPipeline:
             print(f"Error downloading image {image_ref}: {e}")
             return None
 
-    async def _process_batch(self, image_refs: List[str], batch_num: int) -> List[str]:
+    async def _process_batch(self, image_refs: List[str], batch_num: int, total_batches: int) -> List[str]:
         """Process a batch of images asynchronously"""
         connector = aiohttp.TCPConnector(ssl=self.ssl_context)
         async with aiohttp.ClientSession(connector=connector) as session:
             tasks = []
-            for image_ref in image_refs:
+            for idx, image_ref in enumerate(image_refs):
                 print(f"\nDownloading image {image_ref} from batch {batch_num}")
                 task = self._download_image(session, image_ref)
                 tasks.append(task)
+                
+                # Update progress for individual image downloads
+                progress = (idx + 1) / len(image_refs)
+                self._update_progress(f"Downloading batch {batch_num}/{total_batches}", progress)
             
             downloaded_paths = await asyncio.gather(*tasks)
             successful_downloads = [path for path in downloaded_paths if path is not None]
@@ -87,6 +98,8 @@ class FigmaPipeline:
 
     def _get_figma_images(self) -> List[str]:
         """Get image refs from Figma file"""
+        self._update_progress("Fetching Figma images", 0.0)
+        
         headers = {
             "X-Figma-Token": self.figma_access_token
         }
@@ -138,6 +151,7 @@ class FigmaPipeline:
         for idx, ref in enumerate(unique_refs, 1):
             print(f"{idx}. {ref}")
         
+        self._update_progress("Fetching Figma images", 1.0)
         return unique_refs
 
     async def run_pipeline(self):
@@ -145,27 +159,38 @@ class FigmaPipeline:
         try:
             # Get all image refs from Figma
             image_refs = self._get_figma_images()
+            total_batches = (len(image_refs) + self.batch_size - 1) // self.batch_size
             
             # Process images in batches
             for i in range(0, len(image_refs), self.batch_size):
+                batch_num = i // self.batch_size + 1
                 batch = image_refs[i:i + self.batch_size]
-                batch_num = i//self.batch_size + 1
                 print(f"Processing batch {batch_num}")
                 
+                # Update overall progress
+                overall_progress = (batch_num - 1) / total_batches
+                self._update_progress("Overall Progress", overall_progress)
+                
                 # Download batch of images
-                downloaded_paths = await self._process_batch(batch, batch_num)
+                downloaded_paths = await self._process_batch(batch, batch_num, total_batches)
                 
                 if downloaded_paths:
-                    # Run inference on the batch
-                    detect_watermarks(downloaded_paths, batch)
+                    # Update progress for watermark detection
+                    self._update_progress("Detecting watermarks", 0.0)
+                    detect_watermarks(downloaded_paths, batch, batch_num, total_batches)
+                    self._update_progress("Detecting watermarks", 1.0)
                     
                     # Clear input directory after processing
                     self._clear_input_directory()
                 
                 print(f"Completed batch {batch_num}")
+            
+            # Update final progress
+            self._update_progress("Overall Progress", 1.0)
                 
         except Exception as e:
             print(f"Pipeline error: {e}")
+            raise e
 
 async def main():
     # Replace these with your actual Figma credentials

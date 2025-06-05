@@ -57,6 +57,31 @@ status_placeholder = st.empty()
 progress_placeholder = st.empty()
 debug_placeholder = st.empty()
 
+# Progress bars container
+progress_container = st.container()
+
+# Initialize progress bars in session state
+if 'progress_bars' not in st.session_state:
+    st.session_state.progress_bars = {
+        'Overall Progress': 0.0,
+        'Fetching Figma images': 0.0,
+        'Downloading batch': 0.0,
+        'Detecting watermarks': 0.0
+    }
+
+def update_progress(stage: str, progress: float):
+    """Update progress for a specific stage"""
+    st.session_state.progress_bars[stage] = progress
+    
+    # Update the progress bars display
+    with progress_container:
+        for stage_name, stage_progress in st.session_state.progress_bars.items():
+            if stage_name == 'Downloading batch':
+                # Show the current batch progress
+                st.progress(stage_progress, text=f"{stage_name}: {stage_progress:.0%}")
+            else:
+                st.progress(stage_progress, text=f"{stage_name}: {stage_progress:.0%}")
+
 # Show total processed images and results
 if os.path.exists("result.json"):
     with open("result.json", "r") as f:
@@ -113,12 +138,21 @@ def run_pipeline():
         # Clear previous results before starting new pipeline
         clear_all_data()
         
+        # Reset progress bars
+        st.session_state.progress_bars = {
+            'Overall Progress': 0.0,
+            'Fetching Figma images': 0.0,
+            'Downloading batch': 0.0,
+            'Detecting watermarks': 0.0
+        }
+        
         status_placeholder.info("Initializing pipeline...")
         
         pipeline = FigmaPipeline(
             figma_file_key=figma_file_key,
             figma_access_token=figma_access_token,
-            batch_size=batch_size
+            batch_size=batch_size,
+            progress_callback=update_progress
         )
         
         status_placeholder.info("Starting pipeline...")
