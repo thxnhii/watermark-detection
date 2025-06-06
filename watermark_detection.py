@@ -1,7 +1,8 @@
 from ultralytics import YOLO
 import os
 import json
-from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
+from PIL import Image, ImageDraw
+import traceback
 
 model_path = 'watermarks.pt'
 INPUT_DIR = "input_images"
@@ -9,14 +10,15 @@ OUTPUT_DIR = "output_images"
 
 model = YOLO(model_path)
 
-def image_enhancer(image_path, threshold=70):
-	image = Image.open(image_path).convert("RGB")
-	gray_image = image.convert("L")
-	enhancer = ImageEnhance.Contrast(gray_image)
-	contrast_image = enhancer.enhance(0.85)
-	sharpened_image = contrast_image.filter(ImageFilter.EDGE_ENHANCE_MORE)
-	sharpened_image = sharpened_image.point(lambda x: x if x > threshold else 0)
-	return sharpened_image.convert("RGB")
+def image_enhancer(image_path):
+    try:
+        image = Image.open(image_path)
+        if image.mode != 'RGBA':
+            image = image.convert("RGBA")
+        return image
+    except Exception as e:
+        print(f"Error enhancing image {image_path}: {str(e)}")
+        return None
 
 def run_inference(image_paths: list, image_refs: list):
     try:
@@ -24,40 +26,49 @@ def run_inference(image_paths: list, image_refs: list):
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         
         # Process images
-        images = [Image.open(image_path) for image_path in image_paths]
-        results = [model.predict(image, conf=0.1, iou=0.) for image in images]
-        
         watermark_status = []
-        for idx, (result, image_ref) in enumerate(zip(results, image_refs)):
-            result = result[0]
-            image = Image.open(image_paths[idx])
-            
-            # Create output path using imageRef
-            output_filename = f"{image_ref}.png"
-            output_path = os.path.join(OUTPUT_DIR, output_filename)
-            
-            if len(result.boxes) > 0:
-                watermark_status.append(
-                    {
+        for idx, (image_path, image_ref) in enumerate(zip(image_paths, image_refs)):
+            try:
+                # Enhance image
+                image = image_enhancer(image_path)
+                if image is None:
+                    print(f"Skipping image {image_ref} due to enhancement error")
+                    continue
+
+                # Run prediction
+                result = model.predict(image, conf=0.1, iou=0.)[0]
+                
+                # Create output path using imageRef
+                output_filename = f"{image_ref}.png"
+                output_path = os.path.join(OUTPUT_DIR, output_filename)
+                
+                # Process result
+                if len(result.boxes) > 0:
+                    watermark_status.append({
                         "image": output_path,
                         "status": True,
                         "imageRef": image_ref
-                    }
-                )
-                for box in result.boxes:
-                    coordinates = box.xyxy.tolist()
+                    })
+                    # Draw boxes for watermarks
                     draw = ImageDraw.Draw(image)
-                    draw.rectangle(coordinates[0], outline="red", width=3)
-                image.save(output_path)
-            else:
-                watermark_status.append(
-                    {
+                    for box in result.boxes:
+                        coordinates = box.xyxy.tolist()
+                        draw.rectangle(coordinates[0], outline="red", width=3)
+                else:
+                    watermark_status.append({
                         "image": output_path,
                         "status": False,
                         "imageRef": image_ref
-                    }
-                )
+                    })
+                
+                # Save the image
                 image.save(output_path)
+                print(f"Successfully processed image {image_ref}")
+
+            except Exception as e:
+                print(f"Error processing image {image_ref}: {str(e)}")
+                print(traceback.format_exc())
+                continue
 
         # Load existing results if file exists
         existing_results = []
@@ -66,6 +77,7 @@ def run_inference(image_paths: list, image_refs: list):
                 with open("result.json", "r", encoding='utf-8') as f:
                     existing_results = json.load(f)
             except json.JSONDecodeError:
+                print("Error reading existing result.json, starting fresh")
                 existing_results = []
 
         # Filter out any existing results with the same imageRef
@@ -78,6 +90,10 @@ def run_inference(image_paths: list, image_refs: list):
         # Save combined results
         with open("result.json", "w", encoding='utf-8') as f:
             json.dump(all_results, f, indent=4)
+            
+        print(f"Successfully processed {len(watermark_status)} images")
+        print(f"Added {len(unique_new_results)} new results to result.json")
 
     except Exception as e:
-        print(e)
+        print(f"Error in run_inference: {str(e)}")
+        print(traceback.format_exc())
