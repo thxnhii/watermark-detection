@@ -130,46 +130,29 @@ if os.path.exists("result.json"):
                     node_urls = []
                     for node in node_mappings[image_ref]:
                         url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
-                        node_urls.append(f"<li><a href='{url}' target='_blank'>{node['name']}</a></li>")
-                    
-                    # Fix image path for HTML
-                    image_path = result["image"].replace("\\", "/")
+                        node_urls.append(f"[{node['name']}]({url})")
                     
                     # Add row to table data
                     table_data.append({
-                        "Image": f"<img src='{image_path}' width='100' style='object-fit: contain;'>",
+                        "Image": result["image"],
                         "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
-                        "Node Links": f"<ol>{''.join(node_urls)}</ol>"
+                        "Node Links": "\n".join(node_urls)
                     })
             
-            # Display the table
+            # Display the table using Streamlit's native components
             if table_data:
-                st.markdown("""
-                <style>
-                .stDataFrame {
-                    width: 100%;
-                }
-                .stDataFrame td {
-                    vertical-align: top;
-                }
-                </style>
-                """, unsafe_allow_html=True)
-                
-                st.markdown("""
-                <table style='width:100%'>
-                    <tr>
-                        <th>Image</th>
-                        <th>Status</th>
-                        <th>Node Links</th>
-                    </tr>
-                    {}
-                </table>
-                """.format(
-                    "".join([
-                        f"<tr><td>{row['Image']}</td><td>{row['Status']}</td><td>{row['Node Links']}</td></tr>"
-                        for row in table_data
-                    ])
-                ), unsafe_allow_html=True)
+                for row in table_data:
+                    col1, col2, col3 = st.columns([1, 1, 2])
+                    with col1:
+                        try:
+                            image = Image.open(row["Image"])
+                            st.image(image, width=100)
+                        except Exception as e:
+                            st.error(f"Error loading image: {str(e)}")
+                    with col2:
+                        st.write(row["Status"])
+                    with col3:
+                        st.markdown(row["Node Links"])
 
         # Display images in a grid
         st.header("Processed Images")
