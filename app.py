@@ -103,8 +103,12 @@ def run_pipeline():
                     results = json.load(f)
                     st.sidebar.metric("Total Processed Images", len(results))
                     
-                    # Display results in the results container
-                    with results_container:
+                    # Create separate containers for table and images
+                    table_container = st.container()
+                    images_container = st.container()
+                    
+                    # Display table in its container
+                    with table_container:
                         st.header("Detailed Results")
                         
                         # Load node mappings
@@ -131,33 +135,29 @@ def run_pipeline():
                                         "Node Links": "\n".join(node_urls)
                                     })
                             
-                            # Display the table using Streamlit's native components
+                            # Display the table
                             if table_data:
-                                # Create a container for the table
-                                table_container = st.container()
-                                
-                                # Display all rows at once
-                                with table_container:
-                                    for row in table_data:
-                                        col1, col2, col3 = st.columns([1, 1, 2])
-                                        with col1:
-                                            try:
-                                                image = Image.open(row["Image"])
-                                                st.image(image, width=100)
-                                            except Exception as e:
-                                                st.error(f"Error loading image: {str(e)}")
-                                        with col2:
-                                            st.write(row["Status"])
-                                        with col3:
-                                            st.markdown(row["Node Links"])
-                                        st.markdown("---")  # Add a separator between rows
-
-                        # Display images in a grid
+                                for row in table_data:
+                                    col1, col2, col3 = st.columns([1, 1, 2])
+                                    with col1:
+                                        try:
+                                            image = Image.open(row["Image"])
+                                            st.image(image, width=100)
+                                        except Exception as e:
+                                            st.error(f"Error loading image: {str(e)}")
+                                    with col2:
+                                        st.write(row["Status"])
+                                    with col3:
+                                        st.markdown(row["Node Links"])
+                                    st.markdown("---")
+                    
+                    # Display images in their container
+                    with images_container:
                         st.header("Processed Images")
-
+                        
                         # Create columns for the grid
                         cols = st.columns(3)  # 3 images per row
-
+                        
                         for idx, result in enumerate(results):
                             col_idx = idx % 3
                             with cols[col_idx]:
@@ -168,13 +168,13 @@ def run_pipeline():
                                         # Display image
                                         image = Image.open(output_path)
                                         st.image(image)
-
+                                        
                                         # Display status with color
                                         if result["status"]:
                                             st.error("Watermark Detected")
                                         else:
                                             st.success("No Watermark")
-
+                                        
                                         # Display filename
                                         st.caption(os.path.basename(output_path))
                                     else:
