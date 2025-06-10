@@ -142,11 +142,18 @@ def run_pipeline():
                                 # Prepare data for DataFrame
                                 table_rows = []
                                 for row in table_data:
-                                    table_rows.append({
-                                        "Image": row["Image"],
-                                        "Status": row["Status"],
-                                        "Node Links": row["Node Links"]
-                                    })
+                                    try:
+                                        # Load and resize image for display
+                                        img = Image.open(row["Image"])
+                                        img.thumbnail((100, 100))  # Resize image for display
+                                        
+                                        table_rows.append({
+                                            "Image": img,  # Pass PIL Image object directly
+                                            "Status": row["Status"],
+                                            "Node Links": row["Node Links"]
+                                        })
+                                    except Exception as e:
+                                        st.error(f"Error loading image: {str(e)}")
                                 
                                 # Create DataFrame
                                 df = pd.DataFrame(table_rows)
@@ -183,7 +190,8 @@ def run_pipeline():
                                         )
                                     },
                                     hide_index=True,
-                                    use_container_width=True
+                                    use_container_width=True,
+                                    height=None  # Let Streamlit handle the height automatically
                                 )
                     
                     # Display images in their container
