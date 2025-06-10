@@ -71,25 +71,43 @@ class FigmaPipeline:
             image_url = self._get_image_url(image_ref)
             self._log(f"Attempting to download image from URL: {image_url}")
 
-            # Add headers to mimic browser request
+            # Add comprehensive headers to mimic browser request
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Referer": f"https://www.figma.com/file/{self.figma_file_key}/"
+                "Accept-Encoding": "gzip, deflate, br",
+                "Referer": f"https://www.figma.com/file/{self.figma_file_key}/",
+                "Sec-Fetch-Dest": "image",
+                "Sec-Fetch-Mode": "no-cors",
+                "Sec-Fetch-Site": "same-origin",
+                "Connection": "keep-alive",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache"
             }
 
             self._log(f"Using headers: {headers}")
 
             # First request to get the redirect URL
-            async with session.get(image_url, headers=headers, ssl=self.ssl_context, allow_redirects=False) as response:
+            async with session.get(
+                image_url, 
+                headers=headers, 
+                ssl=self.ssl_context,
+                allow_redirects=False,
+                timeout=30
+            ) as response:
                 if response.status in (301, 302, 303, 307, 308):
                     # Get the S3 URL from the Location header
                     s3_url = response.headers['Location']
                     self._log(f"Redirected to S3 URL: {s3_url}")
 
-                    # Now download from the S3 URL
-                    async with session.get(s3_url, headers=headers, ssl=self.ssl_context) as s3_response:
+                    # Now download from the S3 URL with the same headers
+                    async with session.get(
+                        s3_url, 
+                        headers=headers, 
+                        ssl=self.ssl_context,
+                        timeout=30
+                    ) as s3_response:
                         if s3_response.status == 200:
                             filepath = os.path.join(self.input_dir, f"{image_ref}.png")
                             with open(filepath, 'wb') as f:
@@ -288,9 +306,6 @@ class FigmaPipeline:
                     
                     # Run inference on the batch
                     detect_watermarks(downloaded_paths, batch)
-
-                    # Clear input directory after processing
-                    self._clear_input_directory()
 
                     # Count only successfully processed images from result.json
                     if os.path.exists("result.json"):

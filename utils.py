@@ -20,7 +20,7 @@ def clear_directory(directory: str) -> None:
     else:
         os.makedirs(directory, exist_ok=True)
 
-def clear_all_data(input_dir: str = "input_images", output_dir: str = "output_images", result_file: str = "result.json") -> None:
+def clear_all_data(input_dir: str = "input_images", output_dir: str = "output_images", result_file: str = "result.json", node_mappings_file: str = "node_mappings.json") -> None:
     """Clear all data folders and files"""
     try:
         # Clear input directory
@@ -34,7 +34,6 @@ def clear_all_data(input_dir: str = "input_images", output_dir: str = "output_im
             os.remove(result_file)
             
         # Remove node mappings file if it exists
-        node_mappings_file = "node_mappings.json"
         if os.path.exists(node_mappings_file):
             os.remove(node_mappings_file)
             
