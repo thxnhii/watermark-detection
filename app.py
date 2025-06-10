@@ -75,6 +75,7 @@ def run_pipeline():
         
         # Create containers for dynamic content
         status_container = st.empty()
+        metric_container = st.empty()
         results_container = st.empty()
         table_container = st.empty()
         images_container = st.empty()
@@ -101,12 +102,13 @@ def run_pipeline():
             
             # Display results
             if os.path.exists("result.json"):
-                # Create a container for all results
-                with results_container.container():
-                    with open("result.json", "r") as f:
-                        results = json.load(f)
+                with open("result.json", "r") as f:
+                    results = json.load(f)
+                    with metric_container.container():
                         st.sidebar.metric("Total Processed Images", len(results))
 
+                # Create a container for all results
+                with results_container.container():
                     # Display table in its container
                     with table_container.container():
                         st.header("Detailed Results")
