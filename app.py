@@ -17,6 +17,7 @@ nest_asyncio.apply()
 # Initialize session state
 if 'initialized' not in st.session_state:
     clear_all_data()
+    setup_directories()
     st.session_state.initialized = True
 
 st.set_page_config(
@@ -38,6 +39,7 @@ with st.sidebar:
     # Add clear results button
     if st.button("Clear Results", type="secondary"):
         clear_all_data()
+        setup_directories()
         st.session_state.initialized = True
         st.success("All data cleared!")
         st.rerun()
@@ -71,6 +73,7 @@ def run_pipeline():
 
         # Clear all data and UI elements, same as Clear Results button
         clear_all_data()
+        setup_directories()
         st.session_state.initialized = True
         
         # Create containers for dynamic content
