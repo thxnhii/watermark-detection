@@ -97,7 +97,7 @@ def run_pipeline():
             loop.run_until_complete(pipeline.run_pipeline())
             status_container.success("Pipeline completed successfully!")
             
-            # Instead of rerunning the entire script, just update the results
+            # Display results
             if os.path.exists("result.json"):
                 with open("result.json", "r") as f:
                     results = json.load(f)
@@ -127,24 +127,30 @@ def run_pipeline():
                                     # Add row to table data
                                     table_data.append({
                                         "Image": result["image"],
-                                        "Status": "�� Watermark Detected" if result["status"] else "🟢 No Watermark",
+                                        "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
                                         "Node Links": "\n".join(node_urls)
                                     })
                             
                             # Display the table using Streamlit's native components
                             if table_data:
-                                for row in table_data:
-                                    col1, col2, col3 = st.columns([1, 1, 2])
-                                    with col1:
-                                        try:
-                                            image = Image.open(row["Image"])
-                                            st.image(image, width=100)
-                                        except Exception as e:
-                                            st.error(f"Error loading image: {str(e)}")
-                                    with col2:
-                                        st.write(row["Status"])
-                                    with col3:
-                                        st.markdown(row["Node Links"])
+                                # Create a container for the table
+                                table_container = st.container()
+                                
+                                # Display all rows at once
+                                with table_container:
+                                    for row in table_data:
+                                        col1, col2, col3 = st.columns([1, 1, 2])
+                                        with col1:
+                                            try:
+                                                image = Image.open(row["Image"])
+                                                st.image(image, width=100)
+                                            except Exception as e:
+                                                st.error(f"Error loading image: {str(e)}")
+                                        with col2:
+                                            st.write(row["Status"])
+                                        with col3:
+                                            st.markdown(row["Node Links"])
+                                        st.markdown("---")  # Add a separator between rows
 
                         # Display images in a grid
                         st.header("Processed Images")
@@ -175,6 +181,7 @@ def run_pipeline():
                                         st.error(f"Image not found: {output_path}")
                                 except Exception as e:
                                     st.error(f"Error loading image: {str(e)}")
+                        
         finally:
             # Clean up the event loop
             loop.close()
