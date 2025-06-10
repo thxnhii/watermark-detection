@@ -23,11 +23,20 @@ def clear_directory(directory: str) -> None:
 def clear_all_data(input_dir: str = "input_images", output_dir: str = "output_images", result_file: str = "result.json") -> None:
     """Clear all data folders and files"""
     try:
+        # Clear input directory
         clear_directory(input_dir)
+        
+        # Clear output directory
         clear_directory(output_dir)
         
+        # Remove result file if it exists
         if os.path.exists(result_file):
             os.remove(result_file)
+            
+        # Remove node mappings file if it exists
+        node_mappings_file = "node_mappings.json"
+        if os.path.exists(node_mappings_file):
+            os.remove(node_mappings_file)
             
     except Exception as e:
         print(f"Error during cleanup: {e}")

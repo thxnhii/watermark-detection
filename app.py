@@ -71,8 +71,12 @@ def run_pipeline():
 
         # Clear previous results before starting new pipeline
         clear_all_data()
+        
+        # Clear all Streamlit elements
+        st.empty()
+        
+        # Create new status placeholder
         status_placeholder = st.empty()
-
         status_placeholder.info("Initializing pipeline...")
 
         pipeline = FigmaPipeline(
