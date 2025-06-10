@@ -7,7 +7,6 @@ from io import StringIO
 import contextlib
 import json
 from PIL import Image
-import shutil
 import nest_asyncio
 from utils import clear_all_data, setup_directories
 import pandas as pd
@@ -77,6 +76,8 @@ def run_pipeline():
         # Create containers for dynamic content
         status_container = st.empty()
         results_container = st.empty()
+        table_container = st.empty()
+        images_container = st.empty()
         
         status_container.info("Initializing pipeline...")
 
@@ -100,16 +101,14 @@ def run_pipeline():
             
             # Display results
             if os.path.exists("result.json"):
-                with open("result.json", "r") as f:
-                    results = json.load(f)
-                    st.sidebar.metric("Total Processed Images", len(results))
-                    
-                    # Create separate containers for table and images
-                    table_container = st.container()
-                    images_container = st.container()
-                    
+                # Create a container for all results
+                with results_container.container():
+                    with open("result.json", "r") as f:
+                        results = json.load(f)
+                        st.sidebar.metric("Total Processed Images", len(results))
+
                     # Display table in its container
-                    with table_container:
+                    with table_container.container():
                         st.header("Detailed Results")
                         
                         # Load node mappings
@@ -138,8 +137,6 @@ def run_pipeline():
                             
                             # Display the table
                             if table_data:
-                                # Create a DataFrame for better table display
-                                
                                 # Prepare data for DataFrame
                                 table_rows = []
                                 for row in table_data:
@@ -188,7 +185,7 @@ def run_pipeline():
                                 )
                     
                     # Display images in their container
-                    with images_container:
+                    with images_container.container():
                         st.header("Processed Images")
                         
                         # Create columns for the grid
@@ -230,4 +227,3 @@ def run_pipeline():
 # Run button
 if st.button("Run Pipeline", type="primary"):
     run_pipeline()
-
