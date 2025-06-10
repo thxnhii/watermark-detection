@@ -69,10 +69,9 @@ def run_pipeline():
             st.error("Please provide both Figma File Key and Access Token")
             return
 
-        # Clear previous results before starting new pipeline
+        # Clear all data and UI elements, same as Clear Results button
         clear_all_data()
-        
-        # Clear all Streamlit elements
+        st.session_state.initialized = True
         st.empty()
         
         # Create new status placeholder
