@@ -175,11 +175,10 @@ def run_pipeline():
                                             help="Watermark detection status",
                                             width="medium"
                                         ),
-                                        "Node Links": st.column_config.TextColumn(
+                                        "Node Links": st.column_config.Column(
                                             "Node Links",
                                             help="Links to Figma nodes",
-                                            width="large",
-                                            unsafe_allow_html=True  # Allow HTML in links
+                                            width="large"
                                         )
                                     },
                                     hide_index=True,
