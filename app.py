@@ -128,13 +128,13 @@ def run_pipeline():
                                     node_urls = []
                                     for node in node_mappings[image_ref]:
                                         url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
-                                        node_urls.append(f"[{node['name']}]({url})")
+                                        node_urls.append(f'<li><a href="{url}" target="_blank">{node["name"]}</a></li>')
                                     
                                     # Add row to table data
                                     table_data.append({
                                         "Image": result["image"],
                                         "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
-                                        "Node Links": "\n".join(node_urls)
+                                        "Node Links": f'<ul>{"".join(node_urls)}</ul>'
                                     })
                             
                             # Display the table
@@ -158,17 +158,6 @@ def run_pipeline():
                                 # Create DataFrame
                                 df = pd.DataFrame(table_rows)
                                 
-                                # Add filter for Status
-                                status_filter = st.selectbox(
-                                    "Filter by Status",
-                                    options=["All", "Watermark Detected", "No Watermark"],
-                                    index=0
-                                )
-                                
-                                # Apply filter
-                                if status_filter != "All":
-                                    df = df[df["Status"] == ("🔴 Watermark Detected" if status_filter == "Watermark Detected" else "🟢 No Watermark")]
-                                
                                 # Display table with custom styling
                                 st.dataframe(
                                     df,
@@ -186,7 +175,8 @@ def run_pipeline():
                                         "Node Links": st.column_config.TextColumn(
                                             "Node Links",
                                             help="Links to Figma nodes",
-                                            width="large"
+                                            width="large",
+                                            unsafe_allow_html=True  # Allow HTML in links
                                         )
                                     },
                                     hide_index=True,
