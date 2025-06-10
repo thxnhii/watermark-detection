@@ -10,6 +10,7 @@ from PIL import Image
 import shutil
 import nest_asyncio
 from utils import clear_all_data, setup_directories
+import pandas as pd
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -137,19 +138,54 @@ def run_pipeline():
                             
                             # Display the table
                             if table_data:
+                                # Create a DataFrame for better table display
+                                
+                                # Prepare data for DataFrame
+                                table_rows = []
                                 for row in table_data:
-                                    col1, col2, col3 = st.columns([1, 1, 2])
-                                    with col1:
-                                        try:
-                                            image = Image.open(row["Image"])
-                                            st.image(image, width=100)
-                                        except Exception as e:
-                                            st.error(f"Error loading image: {str(e)}")
-                                    with col2:
-                                        st.write(row["Status"])
-                                    with col3:
-                                        st.markdown(row["Node Links"])
-                                    st.markdown("---")
+                                    table_rows.append({
+                                        "Image": row["Image"],
+                                        "Status": row["Status"],
+                                        "Node Links": row["Node Links"]
+                                    })
+                                
+                                # Create DataFrame
+                                df = pd.DataFrame(table_rows)
+                                
+                                # Add filter for Status
+                                status_filter = st.selectbox(
+                                    "Filter by Status",
+                                    options=["All", "Watermark Detected", "No Watermark"],
+                                    index=0
+                                )
+                                
+                                # Apply filter
+                                if status_filter != "All":
+                                    df = df[df["Status"] == ("🔴 Watermark Detected" if status_filter == "Watermark Detected" else "🟢 No Watermark")]
+                                
+                                # Display table with custom styling
+                                st.dataframe(
+                                    df,
+                                    column_config={
+                                        "Image": st.column_config.ImageColumn(
+                                            "Image",
+                                            help="Processed image",
+                                            width="small"
+                                        ),
+                                        "Status": st.column_config.TextColumn(
+                                            "Status",
+                                            help="Watermark detection status",
+                                            width="medium"
+                                        ),
+                                        "Node Links": st.column_config.TextColumn(
+                                            "Node Links",
+                                            help="Links to Figma nodes",
+                                            width="large"
+                                        )
+                                    },
+                                    hide_index=True,
+                                    use_container_width=True
+                                )
                     
                     # Display images in their container
                     with images_container:
