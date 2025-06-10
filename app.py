@@ -131,13 +131,13 @@ def run_pipeline():
                                     node_urls = []
                                     for node in node_mappings[image_ref]:
                                         url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
-                                        node_urls.append(f'<li><a href="{url}" target="_blank">{node["name"]}</a></li>')
+                                        node_urls.append(f'[{node["name"]}]({url})')
                                     
                                     # Add row to table data
                                     table_data.append({
                                         "Image": result["image"],
                                         "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
-                                        "Node Links": f'<ul>{"".join(node_urls)}</ul>'
+                                        "Node Links": " | ".join(node_urls)
                                     })
                             
                             # Display the table
@@ -151,7 +151,7 @@ def run_pipeline():
                                         img.thumbnail((100, 100))  # Resize image for display
                                         
                                         table_rows.append({
-                                            "Image": img,  # Pass PIL Image object directly
+                                            "Image": img,
                                             "Status": row["Status"],
                                             "Node Links": row["Node Links"]
                                         })
@@ -175,15 +175,15 @@ def run_pipeline():
                                             help="Watermark detection status",
                                             width="medium"
                                         ),
-                                        "Node Links": st.column_config.Column(
+                                        "Node Links": st.column_config.LinkColumn(
                                             "Node Links",
                                             help="Links to Figma nodes",
-                                            width="large"
+                                            width="large",
+                                            display_text="Open in Figma"
                                         )
                                     },
                                     hide_index=True,
-                                    use_container_width=True,
-                                    height=None  # Let Streamlit handle the height automatically
+                                    use_container_width=True
                                 )
                     
                     # Display images in their container
