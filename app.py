@@ -72,11 +72,12 @@ def run_pipeline():
         # Clear all data and UI elements, same as Clear Results button
         clear_all_data()
         st.session_state.initialized = True
-        st.empty()
         
-        # Create new status placeholder
-        status_placeholder = st.empty()
-        status_placeholder.info("Initializing pipeline...")
+        # Create containers for dynamic content
+        status_container = st.empty()
+        results_container = st.empty()
+        
+        status_container.info("Initializing pipeline...")
 
         pipeline = FigmaPipeline(
             figma_file_key=figma_file_key,
@@ -85,7 +86,7 @@ def run_pipeline():
             debug_mode=debug_mode
         )
 
-        status_placeholder.info("Starting pipeline...")
+        status_container.info("Starting pipeline...")
 
         # Create a single event loop for the entire pipeline
         loop = asyncio.new_event_loop()
@@ -94,96 +95,96 @@ def run_pipeline():
         try:
             # Run the pipeline
             loop.run_until_complete(pipeline.run_pipeline())
-            status_placeholder.success("Pipeline completed successfully!")
-            st.rerun()  # Refresh the page to show new results
+            status_container.success("Pipeline completed successfully!")
+            
+            # Instead of rerunning the entire script, just update the results
+            if os.path.exists("result.json"):
+                with open("result.json", "r") as f:
+                    results = json.load(f)
+                    st.sidebar.metric("Total Processed Images", len(results))
+                    
+                    # Display results in the results container
+                    with results_container:
+                        st.header("Detailed Results")
+                        
+                        # Load node mappings
+                        if os.path.exists("node_mappings.json"):
+                            with open("node_mappings.json", "r") as f:
+                                node_mappings = json.load(f)
+                            
+                            # Create a table with the requested information
+                            table_data = []
+                            
+                            for result in results:
+                                image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
+                                if image_ref in node_mappings:
+                                    # Create list of node URLs
+                                    node_urls = []
+                                    for node in node_mappings[image_ref]:
+                                        url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
+                                        node_urls.append(f"[{node['name']}]({url})")
+                                    
+                                    # Add row to table data
+                                    table_data.append({
+                                        "Image": result["image"],
+                                        "Status": "�� Watermark Detected" if result["status"] else "🟢 No Watermark",
+                                        "Node Links": "\n".join(node_urls)
+                                    })
+                            
+                            # Display the table using Streamlit's native components
+                            if table_data:
+                                for row in table_data:
+                                    col1, col2, col3 = st.columns([1, 1, 2])
+                                    with col1:
+                                        try:
+                                            image = Image.open(row["Image"])
+                                            st.image(image, width=100)
+                                        except Exception as e:
+                                            st.error(f"Error loading image: {str(e)}")
+                                    with col2:
+                                        st.write(row["Status"])
+                                    with col3:
+                                        st.markdown(row["Node Links"])
+
+                        # Display images in a grid
+                        st.header("Processed Images")
+
+                        # Create columns for the grid
+                        cols = st.columns(3)  # 3 images per row
+
+                        for idx, result in enumerate(results):
+                            col_idx = idx % 3
+                            with cols[col_idx]:
+                                try:
+                                    # Get the output image path
+                                    output_path = result["image"]
+                                    if os.path.exists(output_path):
+                                        # Display image
+                                        image = Image.open(output_path)
+                                        st.image(image)
+
+                                        # Display status with color
+                                        if result["status"]:
+                                            st.error("Watermark Detected")
+                                        else:
+                                            st.success("No Watermark")
+
+                                        # Display filename
+                                        st.caption(os.path.basename(output_path))
+                                    else:
+                                        st.error(f"Image not found: {output_path}")
+                                except Exception as e:
+                                    st.error(f"Error loading image: {str(e)}")
         finally:
             # Clean up the event loop
             loop.close()
 
     except Exception as e:
-        status_placeholder.error(f"Error: {str(e)}")
+        status_container.error(f"Error: {str(e)}")
         if debug_mode:
             st.exception(e)
 
 # Run button
 if st.button("Run Pipeline", type="primary"):
     run_pipeline()
-
-# Show total processed images and results
-if os.path.exists("result.json"):
-    with open("result.json", "r") as f:
-        results = json.load(f)
-        st.sidebar.metric("Total Processed Images", len(results))
-
-        # Display detailed results table first
-        st.header("Detailed Results")
-        
-        # Load node mappings
-        if os.path.exists("node_mappings.json"):
-            with open("node_mappings.json", "r") as f:
-                node_mappings = json.load(f)
-            
-            # Create a table with the requested information
-            table_data = []
-            
-            for result in results:
-                image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
-                if image_ref in node_mappings:
-                    # Create list of node URLs
-                    node_urls = []
-                    for node in node_mappings[image_ref]:
-                        url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
-                        node_urls.append(f"[{node['name']}]({url})")
-                    
-                    # Add row to table data
-                    table_data.append({
-                        "Image": result["image"],
-                        "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
-                        "Node Links": "\n".join(node_urls)
-                    })
-            
-            # Display the table using Streamlit's native components
-            if table_data:
-                for row in table_data:
-                    col1, col2, col3 = st.columns([1, 1, 2])
-                    with col1:
-                        try:
-                            image = Image.open(row["Image"])
-                            st.image(image, width=100)
-                        except Exception as e:
-                            st.error(f"Error loading image: {str(e)}")
-                    with col2:
-                        st.write(row["Status"])
-                    with col3:
-                        st.markdown(row["Node Links"])
-
-        # Display images in a grid
-        st.header("Processed Images")
-
-        # Create columns for the grid
-        cols = st.columns(3)  # 3 images per row
-
-        for idx, result in enumerate(results):
-            col_idx = idx % 3
-            with cols[col_idx]:
-                try:
-                    # Get the output image path
-                    output_path = result["image"]
-                    if os.path.exists(output_path):
-                        # Display image
-                        image = Image.open(output_path)
-                        st.image(image)
-
-                        # Display status with color
-                        if result["status"]:
-                            st.error("Watermark Detected")
-                        else:
-                            st.success("No Watermark")
-
-                        # Display filename
-                        st.caption(os.path.basename(output_path))
-                    else:
-                        st.error(f"Image not found: {output_path}")
-                except Exception as e:
-                    st.error(f"Error loading image: {str(e)}")
 
