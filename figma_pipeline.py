@@ -72,7 +72,7 @@ class FigmaPipeline:
         return f"https://www.figma.com/file/{self.figma_file_key}/image/{image_ref}"
 
     async def _download_image(self, session: ClientSession, image_ref: str, retries: int = 3) -> str:
-        """Download a single image asynchronously with browser-mimicking logic"""
+        """Download a single image asynchronously with robust redirect handling"""
         image_url = self._get_image_url(image_ref)
         self._log(f"Attempting to download image: {image_ref} (URL: {image_url})")
 
@@ -84,32 +84,26 @@ class FigmaPipeline:
             accept_encoding = "gzip, deflate"
             self._log("Brotli not installed, excluding 'br' from Accept-Encoding", "warning")
 
-        # Browser-mimicking headers
+        # Browser-mimicking headers for Figma
         headers = {
             "User-Agent": ua.chrome if USE_FAKE_USERAGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Accept": "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": accept_encoding,
             "Referer": f"https://www.figma.com/file/{self.figma_file_key}/",
-            "Sec-Fetch-Dest": "image",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
+            "X-Figma-Token": self.figma_access_token,
             "Connection": "keep-alive",
             "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "DNT": "1"  # Do Not Track
+            "Pragma": "no-cache"
         }
 
-        # Headers for redirected requests (e.g., S3)
-        redirect_headers = headers.copy()
-        redirect_headers.update({
-            "Sec-Fetch-Site": "cross-site",
-            "Referer": "https://www.figma.com/"  # Generic Figma referer for S3
-        })
+        # Simplified headers for S3
+        s3_headers = {
+            "User-Agent": headers["User-Agent"],
+            "Accept": headers["Accept"],
+            "Accept-Encoding": headers["Accept-Encoding"],
+            "Referer": "https://www.figma.com/"
+        }
 
         filepath = os.path.join(self.input_dir, f"{image_ref}.png")
         attempt = 0
@@ -117,18 +111,58 @@ class FigmaPipeline:
         while attempt < retries:
             attempt += 1
             try:
-                self._log(f"Download attempt {attempt}/{retries} for {image_ref} with headers:", "info")
-                self._log(str(headers), "info")
+                self._log(f"Download attempt {attempt}/{retries} for {image_ref}", "info")
+                self._log(f"Figma headers: {json.dumps(headers, indent=2)}", "info")
+
+                # Initial request to Figma (disable auto-redirect to capture S3 URL)
                 async with session.get(
                     image_url,
                     headers=headers,
                     ssl=self.ssl_context,
                     timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=30),
-                    allow_redirects=True
+                    allow_redirects=False
                 ) as response:
-                    self._log(f"Response status: {response.status}", "info")
-                    self._log(f"Response headers: {dict(response.headers)}", "info")
-                    if response.status == 200:
+                    self._log(f"Figma response status: {response.status}", "info")
+                    self._log(f"Figma response headers: {json.dumps(dict(response.headers), indent=2)}", "info")
+
+                    if response.status in (301, 302, 303, 307, 308):
+                        s3_url = response.headers.get("Location")
+                        if not s3_url:
+                            self._log("No Location header in redirect response", "error")
+                            raise ClientResponseError(response.request_info, response.history, status=response.status, message="Missing Location header")
+
+                        self._log(f"Redirected to S3 URL: {s3_url}", "info")
+                        self._log(f"S3 headers: {json.dumps(s3_headers, indent=2)}", "info")
+
+                        # Follow redirect to S3
+                        async with session.get(
+                            s3_url,
+                            headers=s3_headers,
+                            ssl=self.ssl_context,
+                            timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=30)
+                        ) as s3_response:
+                            self._log(f"S3 response status: {s3_response.status}", "info")
+                            self._log(f"S3 response headers: {json.dumps(dict(s3_response.headers), indent=2)}", "info")
+                            self._log(f"S3 final URL: {s3_response.url}", "info")
+
+                            if s3_response.status == 200:
+                                content = await s3_response.read()
+                                content_length = len(content)
+                                self._log(f"Downloaded content length: {content_length} bytes", "info")
+                                with open(filepath, 'wb') as f:
+                                    f.write(content)
+                                file_size = os.path.getsize(filepath)
+                                self._log(f"Successfully downloaded to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
+                                return filepath
+                            else:
+                                try:
+                                    error_text = await s3_response.text()
+                                    self._log(f"S3 error response: {error_text}", "error")
+                                except:
+                                    self._log("Could not read S3 error response body", "warning")
+                                raise ClientResponseError(s3_response.request_info, s3_response.history, status=s3_response.status, message=s3_response.reason)
+                    elif response.status == 200:
+                        # Direct download (no redirect)
                         content = await response.read()
                         content_length = len(content)
                         self._log(f"Downloaded content length: {content_length} bytes", "info")
@@ -138,11 +172,17 @@ class FigmaPipeline:
                         self._log(f"Successfully downloaded to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
                         return filepath
                     else:
-                        self._log(f"Failed with status {response.status}: {response.reason}", "error")
+                        try:
+                            error_text = await response.text()
+                            self._log(f"Figma error response: {error_text}", "error")
+                        except:
+                            self._log("Could not read Figma error response body", "warning")
+                        raise ClientResponseError(response.request_info, response.history, status=response.status, message=response.reason)
+
             except ClientResponseError as e:
-                if e.status in (429, 503, 502):
-                    delay = 2 ** attempt
-                    self._log(f"Transient error (status {e.status}: {e.message}), retrying after {delay}s", "warning")
+                if e.status in (403, 429, 503, 502):
+                    delay = 2 ** attempt * 2  # 4s, 8s, 16s
+                    self._log(f"Retryable error (status {e.status}: {e.message}), retrying after {delay}s", "warning")
                     await asyncio.sleep(delay)
                     continue
                 self._log(f"HTTP error: {str(e)}", "error")
@@ -152,11 +192,25 @@ class FigmaPipeline:
                 self._log(f"Traceback: {traceback.format_exc()}", "error")
 
             if attempt < retries:
-                delay = 2 ** attempt
-                self._log(f"Retrying after {delay}s delay...", "info")
-                await asyncio.sleep(delay)
+                self._log(f"Retrying after {2 ** attempt * 2}s delay...", "info")
+                await asyncio.sleep(2 ** attempt * 2)
 
         self._log(f"Failed to download {image_ref} after {retries} attempts", "error")
+        # Fallback to synchronous requests
+        self._log(f"Attempting synchronous download for {image_ref}", "warning")
+        try:
+            sync_response = requests.get(image_url, headers=headers, verify=certifi.where(), timeout=30)
+            self._log(f"Synchronous response status: {sync_response.status_code}", "info")
+            if sync_response.status_code == 200:
+                with open(filepath, 'wb') as f:
+                    f.write(sync_response.content)
+                file_size = os.path.getsize(filepath)
+                self._log(f"Successfully downloaded via fallback to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
+                return filepath
+            else:
+                self._log(f"Synchronous error response: {sync_response.text}", "error")
+        except Exception as e:
+            self._log(f"Synchronous download failed: {str(e)}", "error")
         return None
 
     async def _process_batch(self, image_refs: List[str], batch_num: int) -> List[str]:
