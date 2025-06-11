@@ -9,7 +9,7 @@ import json
 from PIL import Image
 import nest_asyncio
 from utils import clear_all_data, setup_directories
-import pandas as pd
+import plotly.express as px
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -25,6 +25,27 @@ st.set_page_config(
     page_icon="🎨",
     layout="wide"
 )
+
+# Custom CSS for link and list styling
+st.markdown("""
+<style>
+a { 
+    color: #1a0dab; 
+    text-decoration: none; 
+}
+a:hover { 
+    text-decoration: underline; 
+}
+ul.node-links { 
+    margin: 0; 
+    padding-left: 20px; 
+    list-style-type: disc; 
+}
+ul.node-links li { 
+    margin-bottom: 5px; 
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.title("🎨 Figma Watermark Detection")
 
@@ -65,20 +86,20 @@ def capture_output():
         sys.stdout, sys.stderr = old_out, old_err
 
 def run_pipeline():
-    """Run the pipeline in a synchronous way"""
+    """Run the pipeline and display overall and detailed results"""
     try:
         if not figma_file_key or not figma_access_token:
             st.error("Please provide both Figma File Key and Access Token")
             return
 
-        # Clear all data and UI elements, same as Clear Results button
+        # Clear all data and UI elements
         clear_all_data()
         setup_directories()
         st.session_state.initialized = True
         
         # Create containers for dynamic content
         status_container = st.empty()
-        metric_container = st.empty()
+        overall_container = st.empty()
         results_container = st.empty()
         table_container = st.empty()
         images_container = st.empty()
@@ -94,7 +115,7 @@ def run_pipeline():
 
         status_container.info("Starting pipeline...")
 
-        # Create a single event loop for the entire pipeline
+        # Create and run event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
@@ -103,122 +124,114 @@ def run_pipeline():
             loop.run_until_complete(pipeline.run_pipeline())
             status_container.success("Pipeline completed successfully!")
             
-            # Display results
-            if os.path.exists("result.json"):
-                with open("result.json", "r") as f:
-                    results = json.load(f)
-                    with metric_container.container():
-                        st.sidebar.metric("Total Processed Images", len(results))
+            # Load results
+            if not os.path.exists("result.json"):
+                st.error("No results found!")
+                return
 
-                # Create a container for all results
-                with results_container.container():
-                    # Display table in its container
-                    with table_container.container():
-                        st.header("Detailed Results")
+            with open("result.json", "r") as f:
+                results = json.load(f)
+
+            # --- Overall Results Section ---
+            with overall_container.container():
+                st.header("Overall Results")
+                
+                # Calculate metrics
+                total_images = len(results)
+                watermarked_images = sum(1 for r in results if r["status"])
+                clean_images = total_images - watermarked_images
+                
+                # Display metrics in columns
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Images Processed", total_images)
+                with col2:
+                    st.metric("Images with Watermark", watermarked_images)
+                with col3:
+                    st.metric("Images without Watermark", clean_images)
+
+                # Display pie chart using Plotly
+                if total_images > 0:
+                    fig = px.pie(
+                        names=["With Watermark", "Without Watermark"],
+                        values=[watermarked_images, clean_images],
+                        title="Watermark Detection Distribution",
+                        color_discrete_sequence=["#FF6384", "#36A2EB"]
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    if debug_mode:
+                        st.info("Plotly pie chart rendered. Check browser console (F12) for any errors.")
+
+            # --- Detailed Results Section ---
+            with results_container.container():
+                st.header("Detailed Results")
+                
+                # Load node mappings
+                node_mappings = {}
+                if os.path.exists("node_mappings.json"):
+                    with open("node_mappings.json", "r") as f:
+                        node_mappings = json.load(f)
+                
+                # Table-like display
+                with table_container.container():
+                    table_data = []
+                    for result in results:
+                        image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
+                        node_urls = []
+                        if image_ref in node_mappings:
+                            for node in node_mappings[image_ref]:
+                                url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
+                                node_urls.append(f"<li><a href='{url}' target='_blank'>{node['name']}</a></li>")
                         
-                        # Load node mappings
-                        if os.path.exists("node_mappings.json"):
-                            with open("node_mappings.json", "r") as f:
-                                node_mappings = json.load(f)
-                            
-                            # Create a table with the requested information
-                            table_data = []
-                            
-                            for result in results:
-                                image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
-                                if image_ref in node_mappings:
-                                    # Create list of node URLs
-                                    node_urls = []
-                                    for node in node_mappings[image_ref]:
-                                        url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
-                                        node_urls.append(f'[{node["name"]}]({url})')
-                                    
-                                    # Add row to table data
-                                    table_data.append({
-                                        "Image": result["image"],
-                                        "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
-                                        "Node Links": " | ".join(node_urls)
-                                    })
-                            
-                            # Display the table
-                            if table_data:
-                                # Prepare data for DataFrame
-                                table_rows = []
-                                for row in table_data:
-                                    try:
-                                        # Load and resize image for display
-                                        img = Image.open(row["Image"])
-                                        img.thumbnail((100, 100))  # Resize image for display
-                                        
-                                        table_rows.append({
-                                            "Image": img,
-                                            "Status": row["Status"],
-                                            "Node Links": row["Node Links"]
-                                        })
-                                    except Exception as e:
-                                        st.error(f"Error loading image: {str(e)}")
-                                
-                                # Create DataFrame
-                                df = pd.DataFrame(table_rows)
-                                
-                                # Display table with custom styling
-                                st.dataframe(
-                                    df,
-                                    column_config={
-                                        "Image": st.column_config.ImageColumn(
-                                            "Image",
-                                            help="Processed image",
-                                            width="small"
-                                        ),
-                                        "Status": st.column_config.TextColumn(
-                                            "Status",
-                                            help="Watermark detection status",
-                                            width="medium"
-                                        ),
-                                        "Node Links": st.column_config.LinkColumn(
-                                            "Node Links",
-                                            help="Links to Figma nodes",
-                                            width="large",
-                                            display_text="Open in Figma"
-                                        )
-                                    },
-                                    hide_index=True,
-                                    use_container_width=True
-                                )
+                        # Create unordered list for node links
+                        node_links_html = "<ul class='node-links'>" + "".join(node_urls) + "</ul>" if node_urls else "N/A"
+                        
+                        table_data.append({
+                            "Image": result["image"],
+                            "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
+                            "Node Links": node_links_html
+                        })
                     
-                    # Display images in their container
-                    with images_container.container():
-                        st.header("Processed Images")
-                        
-                        # Create columns for the grid
-                        cols = st.columns(3)  # 3 images per row
-                        
-                        for idx, result in enumerate(results):
-                            col_idx = idx % 3
-                            with cols[col_idx]:
+                    if table_data:
+                        for row in table_data:
+                            col1, col2, col3 = st.columns([1, 1, 2])
+                            with col1:
                                 try:
-                                    # Get the output image path
-                                    output_path = result["image"]
-                                    if os.path.exists(output_path):
-                                        # Display image
-                                        image = Image.open(output_path)
-                                        st.image(image)
-                                        
-                                        # Display status with color
-                                        if result["status"]:
-                                            st.error("Watermark Detected")
-                                        else:
-                                            st.success("No Watermark")
-                                        
-                                        # Display filename
-                                        st.caption(os.path.basename(output_path))
-                                    else:
-                                        st.error(f"Image not found: {output_path}")
+                                    image = Image.open(row["Image"])
+                                    st.image(image, width=100)
                                 except Exception as e:
                                     st.error(f"Error loading image: {str(e)}")
-                        
+                            with col2:
+                                st.write(row["Status"])
+                            with col3:
+                                st.markdown(row["Node Links"], unsafe_allow_html=True)
+                            st.markdown("---")
+                    else:
+                        st.info("No results to display.")
+                
+                # Image grid display
+                with images_container.container():
+                    st.header("Processed Images")
+                    cols = st.columns(3)
+                    for idx, result in enumerate(results):
+                        col_idx = idx % 3
+                        with cols[col_idx]:
+                            try:
+                                output_path = result["image"]
+                                if os.path.exists(output_path):
+                                    image = Image.open(output_path)
+                                    st.image(image)
+                                    if result["status"]:
+                                        st.error("Watermark Detected")
+                                    else:
+                                        st.success("No Watermark")
+                                    st.caption(os.path.basename(output_path))
+                                else:
+                                    st.error(f"Image not found: {output_path}")
+                            except Exception as e:
+                                st.error(f"Error loading image: {str(e)}")
+        
         finally:
-            # Clean up the event loop
             loop.close()
 
     except Exception as e:
