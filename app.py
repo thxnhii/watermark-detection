@@ -2,6 +2,7 @@ import streamlit as st
 import asyncio
 from figma_pipeline import FigmaPipeline
 import os
+import json
 import sys
 from io import StringIO
 import contextlib
@@ -10,6 +11,7 @@ from PIL import Image
 import nest_asyncio
 from utils import clear_all_data, setup_directories
 import plotly.express as px
+import math
 
 # Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
@@ -19,6 +21,10 @@ if 'initialized' not in st.session_state:
     clear_all_data()
     setup_directories()
     st.session_state.initialized = True
+if 'results_page' not in st.session_state:
+    st.session_state.results_page = 1
+if 'images_page' not in st.session_state:
+    st.session_state.images_page = 1
 
 st.set_page_config(
     page_title="Figma Watermark Detection",
@@ -56,12 +62,17 @@ with st.sidebar:
     figma_file_key = st.text_input("Figma File Key", help="The key from your Figma file URL")
     batch_size = st.number_input("Batch Size", min_value=1, max_value=50, value=10, help="Number of images to process in each batch")
     debug_mode = st.checkbox("Debug Mode", help="Show detailed debug information")
+    
+    # Pagination settings
+    items_per_page = st.selectbox("Items per page", [5, 10, 20, 50], index=1, help="Number of items to display per page")
 
     # Add clear results button
     if st.button("Clear Results", type="secondary"):
         clear_all_data()
         setup_directories()
         st.session_state.initialized = True
+        st.session_state.results_page = 1
+        st.session_state.images_page = 1
         st.success("All data cleared!")
         st.rerun()
 
@@ -85,6 +96,31 @@ def capture_output():
     finally:
         sys.stdout, sys.stderr = old_out, old_err
 
+def display_pagination(total_items, items_per_page, page_key, label):
+    """Display pagination controls"""
+    total_pages = math.ceil(total_items / items_per_page)
+    current_page = st.session_state[page_key]
+    
+    st.subheader(f"{label} (Page {current_page} of {total_pages})")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col1:
+        if st.button("Previous", disabled=(current_page <= 1), key=f"prev_{page_key}"):
+            st.session_state[page_key] -= 1
+            st.rerun()
+    with col2:
+        page_options = list(range(1, total_pages + 1))
+        new_page = st.selectbox("Go to page", page_options, index=current_page-1, key=f"select_{page_key}", label_visibility="collapsed")
+        if new_page != current_page:
+            st.session_state[page_key] = new_page
+            st.rerun()
+    with col3:
+        if st.button("Next", disabled=(current_page >= total_pages), key=f"next_{page_key}"):
+            st.session_state[page_key] += 1
+            st.rerun()
+    
+    return current_page
+
 def run_pipeline():
     """Run the pipeline and display overall and detailed results"""
     try:
@@ -96,6 +132,8 @@ def run_pipeline():
         clear_all_data()
         setup_directories()
         st.session_state.initialized = True
+        st.session_state.results_page = 1
+        st.session_state.images_page = 1
         
         # Create containers for dynamic content
         status_container = st.empty()
@@ -172,10 +210,16 @@ def run_pipeline():
                     with open("node_mappings.json", "r") as f:
                         node_mappings = json.load(f)
                 
+                # Pagination for detailed results
+                current_page = display_pagination(len(results), items_per_page, 'results_page', 'Detailed Results')
+                start_idx = (current_page - 1) * items_per_page
+                end_idx = start_idx + items_per_page
+                paginated_results = results[start_idx:end_idx]
+                
                 # Table-like display
                 with table_container.container():
                     table_data = []
-                    for result in results:
+                    for result in paginated_results:
                         image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
                         node_urls = []
                         if image_ref in node_mappings:
@@ -212,8 +256,15 @@ def run_pipeline():
                 # Image grid display
                 with images_container.container():
                     st.header("Processed Images")
+                    
+                    # Pagination for processed images
+                    current_page = display_pagination(len(results), items_per_page, 'images_page', 'Processed Images')
+                    start_idx = (current_page - 1) * items_per_page
+                    end_idx = start_idx + items_per_page
+                    paginated_results = results[start_idx:end_idx]
+                    
                     cols = st.columns(3)
-                    for idx, result in enumerate(results):
+                    for idx, result in enumerate(paginated_results):
                         col_idx = idx % 3
                         with cols[col_idx]:
                             try:
