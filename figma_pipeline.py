@@ -10,6 +10,15 @@ import certifi
 import streamlit as st
 from watermark_detection import run_inference as detect_watermarks
 from utils import setup_directories, clear_directory
+from aiohttp import ClientSession, TCPConnector
+from aiohttp.client_exceptions import ClientResponseError
+
+try:
+    from fake_useragent import UserAgent
+    ua = UserAgent()
+    USE_FAKE_USERAGENT = True
+except ImportError:
+    USE_FAKE_USERAGENT = False
 
 class FigmaPipeline:
     def __init__(self, figma_file_key: str, figma_access_token: str, batch_size: int = 10, debug_mode: bool = False):
@@ -19,14 +28,12 @@ class FigmaPipeline:
         self.debug_mode = debug_mode
         self.input_dir = "input_images"
         self.output_dir = "output_images"
-        self.mapping_file = "node_mappings.json"  # File to store node mappings
+        self.mapping_file = "node_mappings.json"
 
         setup_directories(self.input_dir, self.output_dir)
 
-        # Configure SSL context
+        # Configure SSL context with proper verification
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
-        self.ssl_context.check_hostname = False
-        self.ssl_context.verify_mode = ssl.CERT_NONE
 
         if self.debug_mode:
             st.info("Pipeline Initialization:")
@@ -44,7 +51,6 @@ class FigmaPipeline:
             print(f"- Output Directory: {self.output_dir}")
 
     def _log(self, message: str, level: str = "info"):
-        """Helper method to log messages either to console or UI based on debug mode"""
         if self.debug_mode:
             if level == "info":
                 st.info(message)
@@ -58,80 +64,84 @@ class FigmaPipeline:
             print(message)
 
     def _clear_input_directory(self):
-        """Clear all files from the input directory"""
         clear_directory(self.input_dir)
 
     def _get_image_url(self, image_ref: str) -> str:
-        """Create Figma image URL from imageRef"""
         return f"https://www.figma.com/file/{self.figma_file_key}/image/{image_ref}"
 
-    async def _download_image(self, session: aiohttp.ClientSession, image_ref: str) -> str:
-        """Download a single image asynchronously"""
-        try:
-            image_url = self._get_image_url(image_ref)
-            self._log(f"Attempting to download image from URL: {image_url}")
+    async def _download_image(self, session: ClientSession, image_ref: str, retries: int = 3) -> str:
+        """Download a single image asynchronously with retries"""
+        image_url = self._get_image_url(image_ref)
+        self._log(f"Attempting to download image: {image_ref} (URL: {image_url})")
 
-            # Add comprehensive headers to mimic browser request
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Referer": f"https://www.figma.com/file/{self.figma_file_key}/",
-                "Sec-Fetch-Dest": "image",
-                "Sec-Fetch-Mode": "no-cors",
-                "Sec-Fetch-Site": "same-origin",
-                "Connection": "keep-alive",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache"
-            }
+        # Define headers to mimic browser
+        headers = {
+            "User-Agent": ua.chrome if USE_FAKE_USERAGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": f"https://www.figma.com/file/{self.figma_file_key}/",
+            "Sec-Fetch-Dest": "image",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Ch-Ua": '"Not A;Brand";v="99", "Chromium";v="126", "Google Chrome";v="126"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
+        }
 
-            self._log(f"Using headers: {headers}")
+        # Headers for S3 request (adjusted for cross-site)
+        s3_headers = headers.copy()
+        s3_headers.update({
+            "Sec-Fetch-Site": "cross-site"
+        })
 
-            # First request to get the redirect URL
-            async with session.get(
-                image_url, 
-                headers=headers, 
-                ssl=self.ssl_context,
-                allow_redirects=False,
-                timeout=30
-            ) as response:
-                if response.status in (301, 302, 303, 307, 308):
-                    # Get the S3 URL from the Location header
-                    s3_url = response.headers['Location']
-                    self._log(f"Redirected to S3 URL: {s3_url}")
+        filepath = os.path.join(self.input_dir, f"{image_ref}.png")
+        attempt = 0
 
-                    # Now download from the S3 URL with the same headers
-                    async with session.get(
-                        s3_url, 
-                        headers=headers, 
-                        ssl=self.ssl_context,
-                        timeout=30
-                    ) as s3_response:
-                        if s3_response.status == 200:
-                            filepath = os.path.join(self.input_dir, f"{image_ref}.png")
-                            with open(filepath, 'wb') as f:
-                                f.write(await s3_response.read())
-                            self._log(f"Successfully downloaded to: {filepath}", "success")
-                            self._log(f"File size: {os.path.getsize(filepath)} bytes")
-                            return filepath
-                        else:
-                            self._log(f"Failed to download from S3: {s3_response.status}", "error")
-                            self._log(f"Response headers: {s3_response.headers}")
-                            return None
-                else:
-                    self._log(f"Failed to get redirect URL: {response.status}", "error")
-                    self._log(f"Response headers: {response.headers}")
-                    return None
-        except Exception as e:
-            self._log(f"Error downloading image {image_ref}: {str(e)}", "error")
-            import traceback
-            self._log(f"Traceback: {traceback.format_exc()}")
-            return None
+        while attempt < retries:
+            attempt += 1
+            try:
+                self._log(f"Download attempt {attempt}/{retries} for {image_ref}")
+                async with session.get(
+                    image_url,
+                    headers=headers,
+                    ssl=self.ssl_context,
+                    timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=30),
+                    allow_redirects=True
+                ) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        with open(filepath, 'wb') as f:
+                            f.write(content)
+                        self._log(f"Successfully downloaded to: {filepath}", "success")
+                        self._log(f"File size: {os.path.getsize(filepath)} bytes")
+                        return filepath
+                    else:
+                        self._log(f"Failed with status {response.status}", "error")
+                        self._log(f"Response headers: {dict(response.headers)}")
+            except ClientResponseError as e:
+                if e.status in (429, 503):
+                    self._log(f"Rate limit or service unavailable (status {e.status}), retrying after delay", "error")
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                self._log(f"HTTP error: {str(e)}", "error")
+            except Exception as e:
+                self._log(f"Error downloading image {image_ref}: {str(e)}", "error")
+                import traceback
+                self._log(f"Traceback: {traceback.format_exc()}")
+
+            if attempt < retries:
+                self._log(f"Retrying after {2 ** attempt}s delay...")
+                await asyncio.sleep(2 ** attempt)
+
+        self._log(f"Failed to download {image_ref} after {retries} attempts", "error")
+        return None
 
     async def _process_batch(self, image_refs: List[str], batch_num: int) -> List[str]:
-        """Process a batch of images asynchronously"""
-        connector = aiohttp.TCPConnector(ssl=self.ssl_context)
+        connector = TCPConnector(ssl=self.ssl_context)
         async with aiohttp.ClientSession(connector=connector) as session:
             tasks = []
             for image_ref in image_refs:
@@ -142,7 +152,6 @@ class FigmaPipeline:
             downloaded_paths = await asyncio.gather(*tasks)
             successful_downloads = [path for path in downloaded_paths if path is not None]
             
-            # Log batch processing results
             self._log(f"\nBatch {batch_num} Processing Results:", "info")
             self._log(f"Total images in batch: {len(image_refs)}")
             self._log(f"Successfully downloaded: {len(successful_downloads)}")
@@ -164,18 +173,14 @@ class FigmaPipeline:
             return successful_downloads
 
     def _get_figma_images(self) -> List[str]:
-        """Get image refs from Figma file"""
         headers = {
             "X-Figma-Token": self.figma_access_token
         }
 
         self._log("Fetching Figma file data...")
-
-        # First get the file data to get node IDs
         file_url = f"https://api.figma.com/v1/files/{self.figma_file_key}"
         self._log(f"Fetching file data from: {file_url}")
 
-        # Configure requests session with SSL verification disabled
         session = requests.Session()
         session.verify = False
         file_response = session.get(file_url, headers=headers)
@@ -185,16 +190,14 @@ class FigmaPipeline:
             self._log(f"Response content: {file_response.text}")
             raise Exception(f"Failed to get Figma file: {file_response.status_code} - {file_response.text}")
 
-        # Get all image nodes from the file
         data = file_response.json()
-        image_refs = set()  # Use a set to automatically remove duplicates
-        image_to_nodes_map = {}  # Dictionary to store imageRef to node IDs mapping
+        image_refs = set()
+        image_to_nodes_map = {}
 
         def extract_image_nodes(node, path=""):
             current_path = f"{path}/{node.get('name', 'unnamed')}"
             self._log(f"Checking node: {current_path} (type: {node.get('type')})")
 
-            # Check if this node is an image or contains images
             if node.get('type') in ['FRAME', 'COMPONENT', 'INSTANCE', 'IMAGE', 'RECTANGLE']:
                 if node.get('fills'):
                     for fill in node.get('fills', []):
@@ -208,7 +211,6 @@ class FigmaPipeline:
                                 image_ref = fill['imageRef']
                                 image_refs.add(image_ref)
                                 
-                                # Store node information for this imageRef
                                 if image_ref not in image_to_nodes_map:
                                     image_to_nodes_map[image_ref] = []
                                 
@@ -219,7 +221,6 @@ class FigmaPipeline:
                                 })
                             break
 
-            # Recursively check children
             if 'children' in node:
                 for child in node['children']:
                     extract_image_nodes(child, current_path)
@@ -227,7 +228,6 @@ class FigmaPipeline:
         self._log("Starting node extraction...")
         extract_image_nodes(data['document'])
 
-        # Save the mappings to a JSON file
         try:
             with open(self.mapping_file, 'w') as f:
                 json.dump(image_to_nodes_map, f, indent=2)
@@ -235,9 +235,8 @@ class FigmaPipeline:
         except Exception as e:
             self._log(f"Error saving node mappings: {str(e)}", "error")
 
-        # Log the mappings
         if self.debug_mode:
-            st.json(image_to_nodes_map)
+            st.json(json.dumps(image_to_nodes_map))
         else:
             print("\nImage to Node Mappings:")
             for image_ref, nodes in image_to_nodes_map.items():
@@ -247,7 +246,6 @@ class FigmaPipeline:
                     print(f"  Name: {node['name']}")
                     print(f"  Path: {node['path']}")
 
-        # Convert set to list
         unique_refs = list(image_refs)
         self._log(f"Found {len(unique_refs)} unique images", "success")
         self._log("Image refs to be downloaded:")
@@ -257,26 +255,21 @@ class FigmaPipeline:
         return unique_refs
 
     async def run_pipeline(self):
-        """Run the complete pipeline"""
         try:
             self._log("Starting pipeline execution...")
             self._log(f"Current working directory: {os.getcwd()}")
             self._log(f"Input directory exists: {os.path.exists(self.input_dir)}")
             self._log(f"Output directory exists: {os.path.exists(self.output_dir)}")
 
-            # Get all image refs from Figma
             image_refs = self._get_figma_images()
             total_images = len(image_refs)
             self._log(f"Total images to process: {total_images}", "info")
 
-            # Calculate total number of batches
             total_batches = (len(image_refs) + self.batch_size - 1) // self.batch_size
             
-            # Create progress bar (always show in both modes)
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            # Process images in batches
             successful_batches = 0
             total_processed = 0
             total_failed = 0
@@ -285,18 +278,15 @@ class FigmaPipeline:
                 batch = image_refs[i:i + self.batch_size]
                 batch_num = i//self.batch_size + 1
                 
-                # Update progress bar (always show in both modes)
                 current_progress = batch_num / total_batches
                 progress_bar.progress(current_progress)
                 status_text.text(f"Processing batch {batch_num}/{total_batches}")
 
-                # Only show detailed debug info in debug mode
                 if self.debug_mode:
                     self._log(f"\nProcessing batch {batch_num}", "info")
                     self._log(f"Batch size: {len(batch)}")
                     self._log(f"Batch items: {batch}")
 
-                # Download batch of images
                 downloaded_paths = await self._process_batch(batch, batch_num)
 
                 if downloaded_paths:
@@ -304,10 +294,8 @@ class FigmaPipeline:
                         self._log(f"Running watermark detection on {len(downloaded_paths)} images")
                         self._log(f"Image paths: {downloaded_paths}")
                     
-                    # Run inference on the batch
                     detect_watermarks(downloaded_paths, batch)
 
-                    # Count only successfully processed images from result.json
                     if os.path.exists("result.json"):
                         with open("result.json", "r") as f:
                             results = json.load(f)
@@ -319,7 +307,6 @@ class FigmaPipeline:
                 if self.debug_mode:
                     self._log(f"Completed batch {batch_num}", "success")
 
-            # Log final processing summary
             self._log("\nPipeline Processing Summary:", "info")
             self._log(f"Total images: {total_images}")
             self._log(f"Successfully processed: {total_processed}")
@@ -328,7 +315,6 @@ class FigmaPipeline:
             self._log(f"Total batches: {total_batches}")
             self._log(f"Successful batches: {successful_batches}")
 
-            # Clear progress bar after completion
             progress_bar.empty()
             status_text.empty()
 
@@ -338,9 +324,7 @@ class FigmaPipeline:
             self._log(f"Traceback: {traceback.format_exc()}")
             st.error(f"Pipeline error: {e}")
 
-
 async def main():
-    # Replace these with your actual Figma credentials
     FIGMA_FILE_KEY = "your_figma_file_key"
     FIGMA_ACCESS_TOKEN = "your_figma_access_token"
 
@@ -353,4 +337,4 @@ async def main():
     await pipeline.run_pipeline()
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
