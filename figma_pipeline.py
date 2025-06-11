@@ -58,6 +58,8 @@ class FigmaPipeline:
                 st.success(message)
             elif level == "error":
                 st.error(message)
+            elif level == "warning":
+                st.warning(message)
             else:
                 st.text(message)
         else:
@@ -70,32 +72,43 @@ class FigmaPipeline:
         return f"https://www.figma.com/file/{self.figma_file_key}/image/{image_ref}"
 
     async def _download_image(self, session: ClientSession, image_ref: str, retries: int = 3) -> str:
-        """Download a single image asynchronously with retries"""
+        """Download a single image asynchronously with browser-mimicking logic"""
         image_url = self._get_image_url(image_ref)
         self._log(f"Attempting to download image: {image_ref} (URL: {image_url})")
 
-        # Define headers to mimic browser
+        # Check Brotli availability
+        try:
+            import brotli
+            accept_encoding = "gzip, deflate, br"
+        except ImportError:
+            accept_encoding = "gzip, deflate"
+            self._log("Brotli not installed, excluding 'br' from Accept-Encoding", "warning")
+
+        # Browser-mimicking headers
         headers = {
-            "User-Agent": ua.chrome if USE_FAKE_USERAGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+            "User-Agent": ua.chrome if USE_FAKE_USERAGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": accept_encoding,
             "Referer": f"https://www.figma.com/file/{self.figma_file_key}/",
             "Sec-Fetch-Dest": "image",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
-            "Sec-Ch-Ua": '"Not A;Brand";v="99", "Chromium";v="126", "Google Chrome";v="126"',
+            "Sec-Fetch-User": "?1",
+            "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
             "Sec-Ch-Ua-Mobile": "?0",
             "Sec-Ch-Ua-Platform": '"Windows"',
             "Connection": "keep-alive",
             "Cache-Control": "no-cache",
-            "Pragma": "no-cache"
+            "Pragma": "no-cache",
+            "DNT": "1"  # Do Not Track
         }
 
-        # Headers for S3 request (adjusted for cross-site)
-        s3_headers = headers.copy()
-        s3_headers.update({
-            "Sec-Fetch-Site": "cross-site"
+        # Headers for redirected requests (e.g., S3)
+        redirect_headers = headers.copy()
+        redirect_headers.update({
+            "Sec-Fetch-Site": "cross-site",
+            "Referer": "https://www.figma.com/"  # Generic Figma referer for S3
         })
 
         filepath = os.path.join(self.input_dir, f"{image_ref}.png")
@@ -104,7 +117,8 @@ class FigmaPipeline:
         while attempt < retries:
             attempt += 1
             try:
-                self._log(f"Download attempt {attempt}/{retries} for {image_ref}")
+                self._log(f"Download attempt {attempt}/{retries} for {image_ref} with headers:", "info")
+                self._log(str(headers), "info")
                 async with session.get(
                     image_url,
                     headers=headers,
@@ -112,30 +126,35 @@ class FigmaPipeline:
                     timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=30),
                     allow_redirects=True
                 ) as response:
+                    self._log(f"Response status: {response.status}", "info")
+                    self._log(f"Response headers: {dict(response.headers)}", "info")
                     if response.status == 200:
                         content = await response.read()
+                        content_length = len(content)
+                        self._log(f"Downloaded content length: {content_length} bytes", "info")
                         with open(filepath, 'wb') as f:
                             f.write(content)
-                        self._log(f"Successfully downloaded to: {filepath}", "success")
-                        self._log(f"File size: {os.path.getsize(filepath)} bytes")
+                        file_size = os.path.getsize(filepath)
+                        self._log(f"Successfully downloaded to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
                         return filepath
                     else:
-                        self._log(f"Failed with status {response.status}", "error")
-                        self._log(f"Response headers: {dict(response.headers)}")
+                        self._log(f"Failed with status {response.status}: {response.reason}", "error")
             except ClientResponseError as e:
-                if e.status in (429, 503):
-                    self._log(f"Rate limit or service unavailable (status {e.status}), retrying after delay", "error")
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                if e.status in (429, 503, 502):
+                    delay = 2 ** attempt
+                    self._log(f"Transient error (status {e.status}: {e.message}), retrying after {delay}s", "warning")
+                    await asyncio.sleep(delay)
                     continue
                 self._log(f"HTTP error: {str(e)}", "error")
             except Exception as e:
-                self._log(f"Error downloading image {image_ref}: {str(e)}", "error")
+                self._log(f"Unexpected error downloading {image_ref}: {str(e)}", "error")
                 import traceback
-                self._log(f"Traceback: {traceback.format_exc()}")
+                self._log(f"Traceback: {traceback.format_exc()}", "error")
 
             if attempt < retries:
-                self._log(f"Retrying after {2 ** attempt}s delay...")
-                await asyncio.sleep(2 ** attempt)
+                delay = 2 ** attempt
+                self._log(f"Retrying after {delay}s delay...", "info")
+                await asyncio.sleep(delay)
 
         self._log(f"Failed to download {image_ref} after {retries} attempts", "error")
         return None
@@ -236,7 +255,7 @@ class FigmaPipeline:
             self._log(f"Error saving node mappings: {str(e)}", "error")
 
         if self.debug_mode:
-            st.json(json.dumps(image_to_nodes_map))
+            st.json(image_to_nodes_map)
         else:
             print("\nImage to Node Mappings:")
             for image_ref, nodes in image_to_nodes_map.items():

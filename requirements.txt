@@ -7,3 +7,4 @@ certifi>=2024.2.2
 nest_asyncio>=1.5.8
 plotly>=5.15.0
 fake-useragent>=1.5.1
+brotli>=1.1.0
