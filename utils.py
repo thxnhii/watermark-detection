@@ -1,6 +1,4 @@
 import os
-import shutil
-from typing import List, Optional
 
 def setup_directories(input_dir: str = "input_images", output_dir: str = "output_images") -> None:
     """Create input and output directories if they don't exist"""

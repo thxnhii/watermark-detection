@@ -1,8 +1,7 @@
 import os
 import json
 import requests
-import shutil
-from typing import List, Dict, Set
+from typing import List
 import asyncio
 import aiohttp
 import ssl
@@ -71,146 +70,85 @@ class FigmaPipeline:
     def _get_image_url(self, image_ref: str) -> str:
         return f"https://www.figma.com/file/{self.figma_file_key}/image/{image_ref}"
 
+    def _get_file_extension(self, content_type: str) -> str:
+        """Determine file extension based on Content-Type"""
+        content_type = content_type.lower()
+        if "image/png" in content_type:
+            return ".png"
+        elif "image/jpeg" in content_type or "image/jpg" in content_type:
+            return ".jpg"
+        elif "image/webp" in content_type:
+            return ".webp"
+        return ".png"  # Default to PNG if unknown
+
     async def _download_image(self, session: ClientSession, image_ref: str, retries: int = 3) -> str:
-        """Download a single image asynchronously with robust redirect handling"""
+        """
+        Download a single image asynchronously from a Figma image URL, following redirects to the final image.
+        Mimics browser behavior with appropriate headers and handles Figma access token for private files.
+        """
         image_url = self._get_image_url(image_ref)
-        self._log(f"Attempting to download image: {image_ref} (URL: {image_url})")
+        self._log(f"Downloading image: {image_ref}")
 
-        # Check Brotli availability
-        try:
-            import brotli
-            accept_encoding = "gzip, deflate, br"
-        except ImportError:
-            accept_encoding = "gzip, deflate"
-            self._log("Brotli not installed, excluding 'br' from Accept-Encoding", "warning")
-
-        # Browser-mimicking headers for Figma
+        # Browser-mimicking headers
         headers = {
-            "User-Agent": ua.chrome if USE_FAKE_USERAGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": ua.chrome if USE_FAKE_USERAGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "Accept": "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": accept_encoding,
+            "Accept-Encoding": "gzip, deflate, br",
             "Referer": f"https://www.figma.com/file/{self.figma_file_key}/",
-            "X-Figma-Token": self.figma_access_token,
             "Connection": "keep-alive",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache"
         }
+        if self.figma_access_token:
+            headers["X-Figma-Token"] = self.figma_access_token
 
-        # Simplified headers for S3
-        s3_headers = {
-            "User-Agent": headers["User-Agent"],
-            "Accept": headers["Accept"],
-            "Accept-Encoding": headers["Accept-Encoding"],
-            "Referer": "https://www.figma.com/"
-        }
-
-        filepath = os.path.join(self.input_dir, f"{image_ref}.png")
         attempt = 0
-
         while attempt < retries:
             attempt += 1
             try:
-                self._log(f"Download attempt {attempt}/{retries} for {image_ref}", "info")
-                self._log(f"Figma headers: {json.dumps(headers, indent=2)}", "info")
-
-                # Initial request to Figma (disable auto-redirect to capture S3 URL)
                 async with session.get(
                     image_url,
                     headers=headers,
                     ssl=self.ssl_context,
                     timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=30),
-                    allow_redirects=False
+                    allow_redirects=True
                 ) as response:
-                    self._log(f"Figma response status: {response.status}", "info")
-                    self._log(f"Figma response headers: {json.dumps(dict(response.headers), indent=2)}", "info")
+                    if response.status == 200:
+                        content_type = response.headers.get("Content-Type", "")
+                        if "image" not in content_type.lower():
+                            self._log(f"Response is not an image (Content-Type: {content_type})", "error")
+                            return None
 
-                    if response.status in (301, 302, 303, 307, 308):
-                        s3_url = response.headers.get("Location")
-                        if not s3_url:
-                            self._log("No Location header in redirect response", "error")
-                            raise ClientResponseError(response.request_info, response.history, status=response.status, message="Missing Location header")
-
-                        self._log(f"Redirected to S3 URL: {s3_url}", "info")
-                        self._log(f"S3 headers: {json.dumps(s3_headers, indent=2)}", "info")
-
-                        # Follow redirect to S3
-                        async with session.get(
-                            s3_url,
-                            headers=s3_headers,
-                            ssl=self.ssl_context,
-                            timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=30)
-                        ) as s3_response:
-                            self._log(f"S3 response status: {s3_response.status}", "info")
-                            self._log(f"S3 response headers: {json.dumps(dict(s3_response.headers), indent=2)}", "info")
-                            self._log(f"S3 final URL: {s3_response.url}", "info")
-
-                            if s3_response.status == 200:
-                                content = await s3_response.read()
-                                content_length = len(content)
-                                self._log(f"Downloaded content length: {content_length} bytes", "info")
-                                with open(filepath, 'wb') as f:
-                                    f.write(content)
-                                file_size = os.path.getsize(filepath)
-                                self._log(f"Successfully downloaded to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
-                                return filepath
-                            else:
-                                try:
-                                    error_text = await s3_response.text()
-                                    self._log(f"S3 error response: {error_text}", "error")
-                                except:
-                                    self._log("Could not read S3 error response body", "warning")
-                                raise ClientResponseError(s3_response.request_info, s3_response.history, status=s3_response.status, message=s3_response.reason)
-                    elif response.status == 200:
-                        # Direct download (no redirect)
+                        extension = self._get_file_extension(content_type)
+                        filepath = os.path.join(self.input_dir, f"{image_ref}{extension}")
                         content = await response.read()
-                        content_length = len(content)
-                        self._log(f"Downloaded content length: {content_length} bytes", "info")
                         with open(filepath, 'wb') as f:
                             f.write(content)
                         file_size = os.path.getsize(filepath)
-                        self._log(f"Successfully downloaded to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
+                        self._log(f"Downloaded: {filepath} ({file_size/1024:.2f} KB)", "success")
                         return filepath
                     else:
                         try:
                             error_text = await response.text()
-                            self._log(f"Figma error response: {error_text}", "error")
+                            self._log(f"Error response (status {response.status}): {error_text}", "error")
                         except:
-                            self._log("Could not read Figma error response body", "warning")
+                            self._log(f"Error response (status {response.status}): Unable to read body", "error")
                         raise ClientResponseError(response.request_info, response.history, status=response.status, message=response.reason)
 
             except ClientResponseError as e:
                 if e.status in (403, 429, 503, 502):
-                    delay = 2 ** attempt * 2  # 4s, 8s, 16s
+                    delay = 2 ** attempt * 2
                     self._log(f"Retryable error (status {e.status}: {e.message}), retrying after {delay}s", "warning")
                     await asyncio.sleep(delay)
                     continue
                 self._log(f"HTTP error: {str(e)}", "error")
+                return None
             except Exception as e:
-                self._log(f"Unexpected error downloading {image_ref}: {str(e)}", "error")
-                import traceback
-                self._log(f"Traceback: {traceback.format_exc()}", "error")
-
-            if attempt < retries:
-                self._log(f"Retrying after {2 ** attempt * 2}s delay...", "info")
-                await asyncio.sleep(2 ** attempt * 2)
+                self._log(f"Error downloading {image_ref}: {str(e)}", "error")
+                return None
 
         self._log(f"Failed to download {image_ref} after {retries} attempts", "error")
-        # Fallback to synchronous requests
-        self._log(f"Attempting synchronous download for {image_ref}", "warning")
-        try:
-            sync_response = requests.get(image_url, headers=headers, verify=certifi.where(), timeout=30)
-            self._log(f"Synchronous response status: {sync_response.status_code}", "info")
-            if sync_response.status_code == 200:
-                with open(filepath, 'wb') as f:
-                    f.write(sync_response.content)
-                file_size = os.path.getsize(filepath)
-                self._log(f"Successfully downloaded via fallback to: {filepath} (Size: {file_size/1024:.2f} KB)", "success")
-                return filepath
-            else:
-                self._log(f"Synchronous error response: {sync_response.text}", "error")
-        except Exception as e:
-            self._log(f"Synchronous download failed: {str(e)}", "error")
         return None
 
     async def _process_batch(self, image_refs: List[str], batch_num: int) -> List[str]:
@@ -231,17 +169,14 @@ class FigmaPipeline:
             self._log(f"Failed downloads: {len(image_refs) - len(successful_downloads)}")
             
             if successful_downloads:
-                self._log("\nSuccessfully processed images:")
-                for idx, path in enumerate(successful_downloads, 1):
+                for path in successful_downloads:
                     file_size = os.path.getsize(path)
-                    file_name = os.path.basename(path)
-                    self._log(f"{idx}. {file_name} ({file_size/1024:.2f} KB)")
-            
+                    self._log(f"- {os.path.basename(path)} ({file_size/1024:.2f} KB)")
             if len(image_refs) - len(successful_downloads) > 0:
-                self._log("\nFailed images:", "error")
-                for idx, (ref, path) in enumerate(zip(image_refs, downloaded_paths), 1):
+                self._log("Failed images:", "error")
+                for ref, path in zip(image_refs, downloaded_paths):
                     if path is None:
-                        self._log(f"{idx}. {ref}", "error")
+                        self._log(f"- {ref}", "error")
             
             return successful_downloads
 
@@ -298,7 +233,7 @@ class FigmaPipeline:
                 for child in node['children']:
                     extract_image_nodes(child, current_path)
 
-        self._log("Starting node extraction...")
+        self._log("Extracting image nodes...")
         extract_image_nodes(data['document'])
 
         try:
@@ -315,9 +250,7 @@ class FigmaPipeline:
             for image_ref, nodes in image_to_nodes_map.items():
                 print(f"\nImageRef: {image_ref}")
                 for node in nodes:
-                    print(f"  Node ID: {node['node_id']}")
-                    print(f"  Name: {node['name']}")
-                    print(f"  Path: {node['path']}")
+                    print(f"  Node ID: {node['node_id']}, Name: {node['name']}, Path: {node['path']}")
 
         unique_refs = list(image_refs)
         self._log(f"Found {len(unique_refs)} unique images", "success")
@@ -349,10 +282,9 @@ class FigmaPipeline:
 
             for i in range(0, len(image_refs), self.batch_size):
                 batch = image_refs[i:i + self.batch_size]
-                batch_num = i//self.batch_size + 1
+                batch_num = i // self.batch_size + 1
                 
-                current_progress = batch_num / total_batches
-                progress_bar.progress(current_progress)
+                progress_bar.progress(batch_num / total_batches)
                 status_text.text(f"Processing batch {batch_num}/{total_batches}")
 
                 if self.debug_mode:
