@@ -25,6 +25,10 @@ if 'results_page' not in st.session_state:
     st.session_state.results_page = 1
 if 'images_page' not in st.session_state:
     st.session_state.images_page = 1
+if 'results_per_page' not in st.session_state:
+    st.session_state.results_per_page = 10
+if 'images_per_page' not in st.session_state:
+    st.session_state.images_per_page = 9
 
 st.set_page_config(
     page_title="Figma Watermark Detection",
@@ -64,7 +68,19 @@ with st.sidebar:
     debug_mode = st.checkbox("Debug Mode", help="Show detailed debug information")
     
     # Pagination settings
-    items_per_page = st.selectbox("Items per page", [5, 10, 20, 50], index=1, help="Number of items to display per page")
+    st.subheader("Pagination Settings")
+    st.session_state.results_per_page = st.selectbox(
+        "Items per page (Detailed Results)", 
+        [5, 10, 20, 50], 
+        index=[5, 10, 20, 50].index(st.session_state.results_per_page),
+        help="Number of items to display per page in detailed results"
+    )
+    st.session_state.images_per_page = st.selectbox(
+        "Items per page (Image Grid)", 
+        [6, 9, 12, 15], 
+        index=[6, 9, 12, 15].index(st.session_state.images_per_page),
+        help="Number of items to display per page in image grid"
+    )
 
     # Add clear results button
     if st.button("Clear Results", type="secondary"):
@@ -198,9 +214,9 @@ def run_pipeline():
                         node_mappings = json.load(f)
                 
                 # Get current page for results
-                current_page = display_pagination(len(results), items_per_page, 'results_page', 'Detailed Results')
-                start_idx = (current_page - 1) * items_per_page
-                end_idx = start_idx + items_per_page
+                current_page = display_pagination(len(results), st.session_state.results_per_page, 'results_page', 'Detailed Results')
+                start_idx = (current_page - 1) * st.session_state.results_per_page
+                end_idx = start_idx + st.session_state.results_per_page
                 paginated_results = results[start_idx:end_idx]
                 
                 # Table-like display
@@ -241,36 +257,43 @@ def run_pipeline():
                         st.info("No results to display.")
                 
                 # Add pagination controls below results
-                total_pages = math.ceil(len(results) / items_per_page)
+                total_pages = math.ceil(len(results) / st.session_state.results_per_page)
+                st.markdown("---")  # Add a separator line
                 col1, col2, col3 = st.columns([0.5, 1, 0.5])
                 with col1:
                     if st.button("Previous", disabled=(current_page <= 1), key="prev_results"):
-                        st.session_state.results_page -= 1
-                        st.rerun()
+                        st.session_state.results_page = max(1, current_page - 1)
                 with col2:
                     page_options = list(range(1, total_pages + 1))
                     new_page = st.selectbox("Go to page", page_options, index=current_page-1, key="select_results", label_visibility="collapsed")
                     if new_page != current_page:
                         st.session_state.results_page = new_page
-                        st.rerun()
                 with col3:
                     if st.button("Next", disabled=(current_page >= total_pages), key="next_results"):
-                        st.session_state.results_page += 1
-                        st.rerun()
+                        st.session_state.results_page = min(total_pages, current_page + 1)
                 
                 # Image grid display
                 with images_container.container():
                     st.header("Processed Images")
                     
                     # Get current page for images
-                    current_page = display_pagination(len(results), items_per_page, 'images_page', 'Processed Images')
-                    start_idx = (current_page - 1) * items_per_page
-                    end_idx = start_idx + items_per_page
+                    current_page = display_pagination(len(results), st.session_state.images_per_page, 'images_page', 'Processed Images')
+                    start_idx = (current_page - 1) * st.session_state.images_per_page
+                    end_idx = start_idx + st.session_state.images_per_page
                     paginated_results = results[start_idx:end_idx]
                     
-                    cols = st.columns(3)
+                    # Calculate number of columns based on items per page
+                    num_cols = 3  # Default to 3 columns
+                    if st.session_state.images_per_page == 6:
+                        num_cols = 2
+                    elif st.session_state.images_per_page == 12:
+                        num_cols = 4
+                    elif st.session_state.images_per_page == 15:
+                        num_cols = 5
+                    
+                    cols = st.columns(num_cols)
                     for idx, result in enumerate(paginated_results):
-                        col_idx = idx % 3
+                        col_idx = idx % num_cols
                         with cols[col_idx]:
                             try:
                                 output_path = result["image"]
@@ -288,22 +311,19 @@ def run_pipeline():
                                 st.error(f"Error loading image: {str(e)}")
                     
                     # Add pagination controls below images
-                    total_pages = math.ceil(len(results) / items_per_page)
+                    total_pages = math.ceil(len(results) / st.session_state.images_per_page)
                     col1, col2, col3 = st.columns([0.5, 1, 0.5])
                     with col1:
                         if st.button("Previous", disabled=(current_page <= 1), key="prev_images"):
-                            st.session_state.images_page -= 1
-                            st.rerun()
+                            st.session_state.images_page = max(1, current_page - 1)
                     with col2:
                         page_options = list(range(1, total_pages + 1))
                         new_page = st.selectbox("Go to page", page_options, index=current_page-1, key="select_images", label_visibility="collapsed")
                         if new_page != current_page:
                             st.session_state.images_page = new_page
-                            st.rerun()
                     with col3:
                         if st.button("Next", disabled=(current_page >= total_pages), key="next_images"):
-                            st.session_state.images_page += 1
-                            st.rerun()
+                            st.session_state.images_page = min(total_pages, current_page + 1)
         
         finally:
             loop.close()
