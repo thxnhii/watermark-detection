@@ -103,22 +103,6 @@ def display_pagination(total_items, items_per_page, page_key, label):
     
     st.subheader(f"{label} (Page {current_page} of {total_pages})")
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col1:
-        if st.button("Previous", disabled=(current_page <= 1), key=f"prev_{page_key}"):
-            st.session_state[page_key] -= 1
-            st.rerun()
-    with col2:
-        page_options = list(range(1, total_pages + 1))
-        new_page = st.selectbox("Go to page", page_options, index=current_page-1, key=f"select_{page_key}", label_visibility="collapsed")
-        if new_page != current_page:
-            st.session_state[page_key] = new_page
-            st.rerun()
-    with col3:
-        if st.button("Next", disabled=(current_page >= total_pages), key=f"next_{page_key}"):
-            st.session_state[page_key] += 1
-            st.rerun()
-    
     return current_page
 
 def run_pipeline():
@@ -213,7 +197,7 @@ def run_pipeline():
                     with open("node_mappings.json", "r") as f:
                         node_mappings = json.load(f)
                 
-                # Pagination for detailed results
+                # Get current page for results
                 current_page = display_pagination(len(results), items_per_page, 'results_page', 'Detailed Results')
                 start_idx = (current_page - 1) * items_per_page
                 end_idx = start_idx + items_per_page
@@ -256,11 +240,29 @@ def run_pipeline():
                     else:
                         st.info("No results to display.")
                 
+                # Add pagination controls below results
+                total_pages = math.ceil(len(results) / items_per_page)
+                col1, col2, col3 = st.columns([0.5, 1, 0.5])
+                with col1:
+                    if st.button("Previous", disabled=(current_page <= 1), key="prev_results"):
+                        st.session_state.results_page -= 1
+                        st.rerun()
+                with col2:
+                    page_options = list(range(1, total_pages + 1))
+                    new_page = st.selectbox("Go to page", page_options, index=current_page-1, key="select_results", label_visibility="collapsed")
+                    if new_page != current_page:
+                        st.session_state.results_page = new_page
+                        st.rerun()
+                with col3:
+                    if st.button("Next", disabled=(current_page >= total_pages), key="next_results"):
+                        st.session_state.results_page += 1
+                        st.rerun()
+                
                 # Image grid display
                 with images_container.container():
                     st.header("Processed Images")
                     
-                    # Pagination for processed images
+                    # Get current page for images
                     current_page = display_pagination(len(results), items_per_page, 'images_page', 'Processed Images')
                     start_idx = (current_page - 1) * items_per_page
                     end_idx = start_idx + items_per_page
@@ -284,6 +286,24 @@ def run_pipeline():
                                     st.error(f"Image not found: {output_path}")
                             except Exception as e:
                                 st.error(f"Error loading image: {str(e)}")
+                    
+                    # Add pagination controls below images
+                    total_pages = math.ceil(len(results) / items_per_page)
+                    col1, col2, col3 = st.columns([0.5, 1, 0.5])
+                    with col1:
+                        if st.button("Previous", disabled=(current_page <= 1), key="prev_images"):
+                            st.session_state.images_page -= 1
+                            st.rerun()
+                    with col2:
+                        page_options = list(range(1, total_pages + 1))
+                        new_page = st.selectbox("Go to page", page_options, index=current_page-1, key="select_images", label_visibility="collapsed")
+                        if new_page != current_page:
+                            st.session_state.images_page = new_page
+                            st.rerun()
+                    with col3:
+                        if st.button("Next", disabled=(current_page >= total_pages), key="next_images"):
+                            st.session_state.images_page += 1
+                            st.rerun()
         
         finally:
             loop.close()
