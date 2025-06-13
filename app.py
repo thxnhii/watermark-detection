@@ -31,6 +31,8 @@ if 'images_per_page' not in st.session_state:
     st.session_state.images_per_page = 9
 if 'processed_results' not in st.session_state:
     st.session_state.processed_results = None
+if 'node_mappings' not in st.session_state:
+    st.session_state.node_mappings = {}
 
 st.set_page_config(
     page_title="Figma Watermark Detection",
@@ -137,6 +139,7 @@ def run_pipeline():
         st.session_state.results_page = 1
         st.session_state.images_page = 1
         st.session_state.processed_results = None
+        st.session_state.node_mappings = {}
         
         # Create containers for dynamic content
         status_container = st.empty()
@@ -172,9 +175,15 @@ def run_pipeline():
 
             with open("result.json", "r") as f:
                 results = json.load(f)
-                # Sort results to prioritize watermark detected images
-                results.sort(key=lambda x: not x["status"])  # True (watermark) comes before False (no watermark)
-                st.session_state.processed_results = results           
+
+            # Sort results to prioritize watermark detected images
+            results.sort(key=lambda x: not x["status"])  # True (watermark) comes before False (no watermark)
+            st.session_state.processed_results = results
+
+            # Load node mappings
+            if os.path.exists("node_mappings.json"):
+                with open("node_mappings.json", "r") as f:
+                    st.session_state.node_mappings = json.load(f)
 
             # --- Overall Results Section ---
             with overall_container.container():
@@ -210,12 +219,6 @@ def run_pipeline():
             with results_container.container():
                 st.header("Detailed Results")
                 
-                # Load node mappings
-                node_mappings = {}
-                if os.path.exists("node_mappings.json"):
-                    with open("node_mappings.json", "r") as f:
-                        node_mappings = json.load(f)
-                
                 # Get current page for results
                 current_page = display_pagination(len(results), st.session_state.results_per_page, 'results_page', 'Detailed Results')
                 start_idx = (current_page - 1) * st.session_state.results_per_page
@@ -228,8 +231,8 @@ def run_pipeline():
                     for result in paginated_results:
                         image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
                         node_urls = []
-                        if image_ref in node_mappings:
-                            for node in node_mappings[image_ref]:
+                        if image_ref in st.session_state.node_mappings:
+                            for node in st.session_state.node_mappings[image_ref]:
                                 url = f"https://www.figma.com/board/{figma_file_key}?node-id={node['node_id']}"
                                 node_urls.append(f"<li><a href='{url}' target='_blank'>{node['name']}</a></li>")
                         
@@ -266,17 +269,14 @@ def run_pipeline():
                 with col1:
                     if st.button("Previous", disabled=(current_page <= 1), key="prev_results"):
                         st.session_state.results_page = max(1, current_page - 1)
-                        st.experimental_rerun()
                 with col2:
                     page_options = list(range(1, total_pages + 1))
                     new_page = st.selectbox("Go to page", page_options, index=current_page-1, key="select_results", label_visibility="collapsed")
                     if new_page != current_page:
                         st.session_state.results_page = new_page
-                        st.experimental_rerun()
                 with col3:
                     if st.button("Next", disabled=(current_page >= total_pages), key="next_results"):
                         st.session_state.results_page = min(total_pages, current_page + 1)
-                        st.experimental_rerun()
                 
                 # Image grid display
                 with images_container.container():
@@ -323,17 +323,14 @@ def run_pipeline():
                     with col1:
                         if st.button("Previous", disabled=(current_page <= 1), key="prev_images"):
                             st.session_state.images_page = max(1, current_page - 1)
-                            st.experimental_rerun()
                     with col2:
                         page_options = list(range(1, total_pages + 1))
                         new_page = st.selectbox("Go to page", page_options, index=current_page-1, key="select_images", label_visibility="collapsed")
                         if new_page != current_page:
                             st.session_state.images_page = new_page
-                            st.experimental_rerun()
                     with col3:
                         if st.button("Next", disabled=(current_page >= total_pages), key="next_images"):
                             st.session_state.images_page = min(total_pages, current_page + 1)
-                            st.experimental_rerun()
         
         finally:
             loop.close()
