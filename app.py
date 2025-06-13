@@ -170,6 +170,9 @@ def run_pipeline():
             with open("result.json", "r") as f:
                 results = json.load(f)
 
+            # Sort results to prioritize watermark detected images
+            results.sort(key=lambda x: not x["status"])  # True (watermark) comes before False (no watermark)
+
             # --- Overall Results Section ---
             with overall_container.container():
                 st.header("Overall Results")
