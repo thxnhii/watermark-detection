@@ -22,6 +22,12 @@ if 'initialized' not in st.session_state:
     setup_directories()
     st.session_state.initialized = True
 
+# Initialize session state for storing results
+if 'pipeline_results' not in st.session_state:
+    st.session_state.pipeline_results = None
+if 'figma_file_key_for_download' not in st.session_state:
+    st.session_state.figma_file_key_for_download = None
+
 st.set_page_config(
     page_title="Figma Watermark Detection",
     page_icon="🎨",
@@ -64,6 +70,8 @@ with st.sidebar:
         clear_all_data()
         setup_directories()
         st.session_state.initialized = True
+        st.session_state.pipeline_results = None
+        st.session_state.figma_file_key_for_download = None
         st.success("All data cleared!")
         st.rerun()
 
@@ -134,6 +142,10 @@ def run_pipeline():
             with open("result.json", "r") as f:
                 results = json.load(f)
 
+            # Store results in session state for download functionality
+            st.session_state.pipeline_results = results
+            st.session_state.figma_file_key_for_download = figma_file_key
+
             # Sort results to prioritize watermark detected images
             results.sort(key=lambda x: not x["status"])  # True (watermark) comes before False (no watermark)
 
@@ -147,44 +159,6 @@ def run_pipeline():
             total_images = len(results)
             watermarked_images = sum(1 for r in results if r["status"])
             clean_images = total_images - watermarked_images
-
-            # --- Excel Download Button ---
-            if len(results) > 0:
-                # Prepare overall results DataFrame
-                overall_data = {
-                    "Metric": ["Total Images Processed", "Images with Watermark", "Images without Watermark"],
-                    "Value": [total_images, watermarked_images, clean_images]
-                }
-                df_overall = pd.DataFrame(overall_data)
-                # Prepare detailed results DataFrame
-                excel_csv_data = []
-                for result in results:
-                    image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
-                    node_links = []
-                    if image_ref in node_mappings:
-                        for node in node_mappings[image_ref]:
-                            url = f"https://www.figma.com/file/{figma_file_key}?node-id={node['node_id']}"
-                            node_links.append(f"• {url}")
-                        node_links_str = "\n".join(node_links)
-                    else:
-                        node_links_str = "N/A"
-                    excel_csv_data.append({
-                        "Image": result["image"],
-                        "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
-                        "Node Links": node_links_str
-                    })
-                df_detailed = pd.DataFrame(excel_csv_data)
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_overall.to_excel(writer, index=False, sheet_name='Overall Results')
-                    df_detailed.to_excel(writer, index=False, sheet_name='Detailed Results')
-                output.seek(0)
-                st.download_button(
-                    label="Download Results as Excel",
-                    data=output,
-                    file_name="figma_watermark_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
 
             # --- Overall Results Section ---
             with overall_container.container():
@@ -282,6 +256,84 @@ def run_pipeline():
         if debug_mode:
             st.exception(e)
 
+# Download function
+def create_excel_download():
+    """Create Excel download from stored results"""
+    if not st.session_state.pipeline_results:
+        st.error("No results available for download. Please run the pipeline first.")
+        return None
+    
+    results = st.session_state.pipeline_results
+    figma_file_key = st.session_state.figma_file_key_for_download
+    
+    # Load node mappings
+    node_mappings = {}
+    if os.path.exists("node_mappings.json"):
+        with open("node_mappings.json", "r") as f:
+            node_mappings = json.load(f)
+    
+    # Calculate metrics
+    total_images = len(results)
+    watermarked_images = sum(1 for r in results if r["status"])
+    clean_images = total_images - watermarked_images
+    
+    # Prepare overall results DataFrame
+    overall_data = {
+        "Metric": ["Total Images Processed", "Images with Watermark", "Images without Watermark"],
+        "Value": [total_images, watermarked_images, clean_images]
+    }
+    df_overall = pd.DataFrame(overall_data)
+    
+    # Prepare detailed results DataFrame
+    excel_csv_data = []
+    for result in results:
+        image_ref = os.path.splitext(os.path.basename(result["image"]))[0]
+        node_links = []
+        if image_ref in node_mappings:
+            for node in node_mappings[image_ref]:
+                url = f"https://www.figma.com/file/{figma_file_key}?node-id={node['node_id']}"
+                node_links.append(f"• {url}")
+            node_links_str = "\n".join(node_links)
+        else:
+            node_links_str = "N/A"
+        excel_csv_data.append({
+            "Image": result["image"],
+            "Status": "🔴 Watermark Detected" if result["status"] else "🟢 No Watermark",
+            "Node Links": node_links_str
+        })
+    df_detailed = pd.DataFrame(excel_csv_data)
+    
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_overall.to_excel(writer, index=False, sheet_name='Overall Result')
+        df_detailed.to_excel(writer, index=False, sheet_name='Detailed Results')
+        
+        # Set column widths and wrap text for Node Links column
+        workbook  = writer.book
+        worksheet_detailed = writer.sheets['Detailed Results']
+        # Set minimum width (e.g., 60) and wrap text for Node Links (column C, index 2)
+        wrap_format = workbook.add_format({'text_wrap': True})
+        worksheet_detailed.set_column('C:C', 80, wrap_format)
+    output.seek(0)
+    
+    return output
+
 # Run button
 if st.button("Run Pipeline", type="primary"):
     run_pipeline()
+
+# Download button (separate from pipeline execution)
+if st.session_state.pipeline_results:
+    st.markdown("---")
+    st.header("Download Results")
+    excel_data = create_excel_download()
+    if excel_data:
+        st.download_button(
+            label="Download Results as Excel",
+            data=excel_data,
+            file_name="figma_watermark_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+else:
+    st.markdown("---")
+    st.info("Run the pipeline first to enable download functionality.")
