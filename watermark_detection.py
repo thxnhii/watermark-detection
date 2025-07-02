@@ -43,7 +43,7 @@ def run_inference(image_paths: list, image_refs: list):
                 output_path = os.path.join(OUTPUT_DIR, output_filename)
                 
                 # Process result
-                if len(result.boxes) > 0:
+                if len(result.boxes) > 1:
                     watermark_status.append({
                         "image": output_path,
                         "status": True,
